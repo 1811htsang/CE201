@@ -1,0 +1,7 @@
+[submodule "uEDP"]
+	path = uEDP
+	url = https://github.com/1811htsang/uEDP.git
+
+[submodule "PdM-AF"]
+	path = PdM-AF
+	url = https://github.com/1811htsang/PdM-Acoustic-Fingerprint-on-ESP32-S3.git
