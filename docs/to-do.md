@@ -50,8 +50,33 @@ Hiện tại đã sửa lại PCB design với Kicad v10 và bổ sung symbol + 
 Việc đưa symbol INNP441 vào schematic sẽ sớm diễn ra trong thời gian tới.
 -->
 
-- [ ] Bổ sung lại thông tin các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
-- [ ] Bổ sung hoàn chỉnh các API cần thiết cho lớp PAL trên hardware chủ chốt STM32H723 và ESP32S3. //NOTE - Chỗ này sẽ bao gồm các API về GPIO, ADC, DAC, I2C, SPI, UART, PWM, v.v. để hỗ trợ cho việc thực hiện thí nghiệm Predictive Maintenance.
+- [x] Bổ sung lại thông tin các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
+
+<!-- STATUS
+Hiện tại đã bổ sung ở `docs/references`
+Tuy nhiên ở repo PdM-AF đã có sẵn các bài báo nghiên cứu cần thực hiện literature review trong tài liệu nên mở rộng hướng nghiên cứu để đạt một số lượng bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
+
+# TASK - Phân công nhiệm vụ cho các thành viên trong nhóm để thực hiện literature review và tổng hợp lại thành một tài liệu chung.
+-->
+
+- [ ] Bổ sung hoàn chỉnh các API cần thiết cho lớp PAL trên hardware chủ chốt STM32H723 và ESP32S3
+
+<!-- SECTION
+
+//LINK sources/uEDP/docs/to-do.md:554
+
+```markdown
+- [x] Thực hiện bổ sung C-type API cho archobj STM32F103 (abbr F103), archobj STM32H723 (abbr H723) và archobj ESP32S3 (abbr S3N16) để hỗ trợ việc kiểm tra khả năng sinh code và thực thi các cấu hình logic của μE-LS từ các mô tả logic trong PLD.
+```
+
+#STATUS 
+
+Trong quá trình thực hiện bổ sung API cần thiết cho uutobj F103, đã phát hiện ra việc triển khai API sẽ chỉ cần tập trung vào các phương diện cần thiết thay vì triển khai toàn bộ.
+Do đó, BSP của các MCU chủ chốt chỉ cần được khai báo toàn bộ vào từng PAL nhưng việc triển khai sẽ phụ thuộc vào người dùng và các tính năng cần thiết cho CE201.
+
+#!SECTION
+-->
+
 - [ ] Thống nhất về bộ công cụ sử dụng cho toàn bộ đồ án. //NOTE - chỗ này sẽ bao gồm các công cụ về content, code, version control, CI/CD, testing, v.v. để thống nhất với GV.
 
 <!-- REVIEW
