@@ -43,6 +43,9 @@ Hiện tại thì đã cân nhắc đưa PLTF và AMP/HELF vào trong lộ trìn
 Đã đưa vào lộ trình sau PLTF.
 -->
 
+- [x] Bổ sung API cho uutobj F103 để làm tham khảo cho uutobj H723.
+- [ ] Cập nhật nội dung các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
+- [ ] Bổ sung lộ trình thiết kế API chi tiết cho thuật toán sẽ sử dụng.
 - [ ] Cập nhật và sửa đổi PCB design với TCT40-16R thay bằng INMP441.
 
 <!-- STATUS
