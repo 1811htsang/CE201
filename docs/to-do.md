@@ -44,25 +44,30 @@ Hiện tại thì đã cân nhắc đưa PLTF và AMP/HELF vào trong lộ trìn
 -->
 
 - [x] Bổ sung API cho uutobj F103 để làm tham khảo cho uutobj H723.
-- [ ] Cập nhật nội dung các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
-- [ ] Bổ sung lộ trình thiết kế API chi tiết cho thuật toán sẽ sử dụng.
-- [ ] Cập nhật và sửa đổi PCB design với TCT40-16R thay bằng INMP441.
+- [x] @! TID DOCS001 <+ Cập nhật nội dung các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
+
+<!-- STATUS
+Hiện tại thì μEDP đã chính thức ra mắt releáe v1.1.6 nên có thể cân nhắc chính thức đưa vào sử dụng trong đồ án CE201. Bắt đầu chuyển qua giai đoạn thực hiện thí nghiệm với μEDP v1.1.6.
+-->
+
+- [x] @! TID DOCS002 <+ Bổ sung lại thông tin các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
+
+<!-- STATUS
+Hiện tại đã bổ sung ở `docs/references`
+Tuy nhiên ở repo PdM-AF đã có sẵn các bài báo nghiên cứu cần thực hiện literature review trong tài liệu nên mở rộng hướng nghiên cứu để đạt một số lượng bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
+
+# DEPRECATED - Old TASK - Phân công nhiệm vụ cho các thành viên trong nhóm để thực hiện literature review và tổng hợp lại thành một tài liệu chung.
+-->
+
+- [ ] @! TID INF001 <+ Bổ sung lộ trình thiết kế API chi tiết cho thuật toán sẽ sử dụng.
+- [ ] @! TID PCB002 <+ Cập nhật và sửa đổi PCB design với TCT40-16R thay bằng INMP441.
 
 <!-- STATUS
 Hiện tại đã sửa lại PCB design với Kicad v10 và bổ sung symbol + footprint bị thiếu cho các component trước khi thống nhất đưa ra review.
 Việc đưa symbol INNP441 vào schematic sẽ sớm diễn ra trong thời gian tới.
 -->
 
-- [x] Bổ sung lại thông tin các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
-
-<!-- STATUS
-Hiện tại đã bổ sung ở `docs/references`
-Tuy nhiên ở repo PdM-AF đã có sẵn các bài báo nghiên cứu cần thực hiện literature review trong tài liệu nên mở rộng hướng nghiên cứu để đạt một số lượng bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
-
-# TASK - Phân công nhiệm vụ cho các thành viên trong nhóm để thực hiện literature review và tổng hợp lại thành một tài liệu chung.
--->
-
-- [ ] Bổ sung hoàn chỉnh các API cần thiết cho lớp PAL trên hardware chủ chốt STM32H723 và ESP32S3
+- [ ] @! TID MCU001 <+ Bổ sung hoàn chỉnh các API cần thiết cho lớp PAL trên hardware chủ chốt STM32H723 và ESP32S3
 
 <!-- SECTION
 
