@@ -60,7 +60,14 @@ Tuy nhiên ở repo PdM-AF đã có sẵn các bài báo nghiên cứu cần th�
 -->
 
 - [x] @! TID REPO-003 <+ Bổ sung lại thông tin các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
-- [ ] @! TID PCB-003[epic=PCB] <+ Bổ sung sử dụng LTSpice để mô phỏng mạch điện tử trong schematic và PCB design của repo PdM cũ.
+- [x] @! TID PCB-003[epic=PCB] <+ Bổ sung sử dụng LTSpice để mô phỏng mạch điện tử trong schematic và PCB design của repo PdM cũ.
+
+<!-- STATUS
+Đã bổ sung sử dụng LTSpice để mô tả và thiết kế mạch khuếch đại tín hiệu thay thế cho thiết kế schematics và PCB design của repo PdM cũ. 
+
+Cần cân nhắc bổ sung review của thầy Nguyên để đảm bảo tính đúng đắn của thiết kế.
+-->
+
 - [ ] @! TID INF-001[epic=ALGO] <+ Bổ sung lộ trình thiết kế API chi tiết cho thuật toán sẽ sử dụng. -> Minh đang làm.
 - [ ] @! TID PCB-002[epic=PCB] <+ Cập nhật và sửa đổi PCB design với TCT40-16R thay bằng INMP441.
 
