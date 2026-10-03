@@ -53,3 +53,25 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+lib-cmsisnn/.github/**
+lib-cmsisnn/Tests/UnitTest/TestCases/*/Unity/TestRunner/*
+lib-cmsisnn/Tests/UnitTest/TestCases/*/Unity/TestRunner/*
+lib-cmsisnn/Tests/UnitTest/TestCases/TestData/*/*.tflite
+lib-cmsisnn/Tests/UnitTest/TestCases/TestData/*.json
+lib-cmsisnn/Tests/UnitTest/TestCases/TestData/*/*.json
+lib-cmsisnn/Tests/UnitTest/TestCases/TestData/*/schema_generated.h
+lib-cmsisnn/Tests/UnitTest/PregeneratedData/*
+lib-cmsisnn/Tests/UnitTest/Output/*
+lib-cmsisnn/Tests/UnitTest/Unity/*
+lib-cmsisnn/Tests/UnitTest/downloads/*
+lib-cmsisnn/Tests/UnitTest/build-cortex-m*
+lib-cmsisnn/Documentation/html/*
+lib-cmsisnn/Documentation/DoxyGen/src/history.txt
+lib-cmsisnn/Documentation/DoxyGen/nn.dxy
+lib-cmsisnn/Tests/**
+lib-cmsisnn/output
+lib-cmsisnn/__pycache__
+lib-cmsisnn/*.bak
+# Output of the linkchecker tool
+lib-cmsisnn/linkchecker-out.csv
