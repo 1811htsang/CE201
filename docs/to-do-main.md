@@ -68,12 +68,13 @@ Tuy nhiên ở repo PdM-AF đã có sẵn các bài báo nghiên cứu cần th�
 Cần cân nhắc bổ sung review của thầy Nguyên để đảm bảo tính đúng đắn của thiết kế.
 -->
 
-- [ ] @! TID INF-001[epic=ALGO] <+ Bổ sung lộ trình thiết kế API chi tiết cho thuật toán sẽ sử dụng. -> Minh đang làm.
-- [ ] @! TID PCB-002[epic=PCB] <+ Cập nhật và sửa đổi PCB design với TCT40-16R thay bằng INMP441.
+- [x] @! TID INF-001[epic=ALGO] <+ Bổ sung lộ trình thiết kế API chi tiết cho thuật toán sẽ sử dụng. -> Minh đang làm.
+- [x] @! TID INF-002[epic=ALGO] <+ Bổ sung tài liệu tracking làm việc cho pipeline training model.
+- [ ] @! DEPRECATED PCB-002[epic=PCB] <+ Cập nhật và sửa đổi PCB design với TCT40-16R thay bằng INMP441.
+- [x] @! TID PCB-003[epic=ALGO] <+ Hoàn thiện việc mô tả và thiết kế mạch khuếch đại tín hiệu thay thế cho thiết kế schematics và PCB design của repo PdM cũ bằng LTSpice.
 
 <!-- STATUS
-Hiện tại đã sửa lại PCB design với Kicad v10 và bổ sung symbol + footprint bị thiếu cho các component trước khi thống nhất đưa ra review.
-Việc đưa symbol INNP441 vào schematic sẽ sớm diễn ra trong thời gian tới.
+Đã có schematic chi tiết có thể triển khai cập nhật vào PCB design của repo PdM cũ. Cần cân nhắc bổ sung review của thầy Nguyên để đảm bảo tính đúng đắn của thiết kế.
 -->
 
 - [ ] @! TID MCU-001[epic=MCU] <+ Bổ sung hoàn chỉnh các API cần thiết cho lớp PAL trên hardware chủ chốt STM32H723 và ESP32S3
