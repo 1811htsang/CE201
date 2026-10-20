@@ -75,3 +75,5 @@ lib-cmsisnn/__pycache__
 lib-cmsisnn/*.bak
 # Output of the linkchecker tool
 lib-cmsisnn/linkchecker-out.csv
+
+phy-prjecobj-h723/.settings/**
