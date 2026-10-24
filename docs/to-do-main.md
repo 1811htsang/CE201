@@ -60,7 +60,7 @@ Tuy nhiên ở repo PdM-AF đã có sẵn các bài báo nghiên cứu cần th�
 -->
 
 - [x] @! TID REPO-001 <+ Bổ sung lại thông tin các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
-- [x] @! TID PCB-003[epic=PCB] <+ Bổ sung sử dụng LTSpice để mô phỏng mạch điện tử trong schematic và PCB design của repo PdM cũ.
+- [x] @! TID PCB-001[epic=PCB] <+ Bổ sung sử dụng LTSpice để mô phỏng mạch điện tử trong schematic và PCB design của repo PdM cũ.
 
 <!-- STATUS
 Đã bổ sung sử dụng LTSpice để mô tả và thiết kế mạch khuếch đại tín hiệu thay thế cho thiết kế schematics và PCB design của repo PdM cũ. 
@@ -71,7 +71,7 @@ Cần cân nhắc bổ sung review của thầy Nguyên để đảm bảo tính
 - [x] @! TID INF-001[epic=ALGO] <+ Bổ sung lộ trình thiết kế API chi tiết cho thuật toán sẽ sử dụng. -> Minh đang làm.
 - [x] @! TID INF-002[epic=ALGO] <+ Bổ sung tài liệu tracking làm việc cho pipeline training model.
 - [ ] @! DEPRECATED PCB-002[epic=PCB] <+ Cập nhật và sửa đổi PCB design với TCT40-16R thay bằng INMP441.
-- [x] @! TID PCB-003[epic=ALGO] <+ Hoàn thiện việc mô tả và thiết kế mạch khuếch đại tín hiệu thay thế cho thiết kế schematics và PCB design của repo PdM cũ bằng LTSpice.
+- [x] @! TID PCB-002[epic=ALGO] <+ Hoàn thiện việc mô tả và thiết kế mạch khuếch đại tín hiệu thay thế cho thiết kế schematics và PCB design của repo PdM cũ bằng LTSpice.
 
 <!-- STATUS
 Đã có schematic chi tiết có thể triển khai cập nhật vào PCB design của repo PdM cũ. Cần cân nhắc bổ sung review của thầy Nguyên để đảm bảo tính đúng đắn của thiết kế.
@@ -111,9 +111,12 @@ Timeline hiện tại đã thống nhất theo mốc M0-M5 của đồ án 1.
 μEDP đã chốt ở release v1.1.6 để đảm bảo tính ổn định cho việc thực hiện thí nghiệm trong đồ án. Tuy nhiên nếu tồn tại các bản bugfix thì vẫn có thể chuyển sang nhưng không chuyển sang phiên bản mới hơn v1.1.6.
 -->
 
-- [ ] Thống nhất về các testobj và testbench cần thiết để thực hiện các thí nghiệm trong đồ án.
+- [x] Thống nhất về các testobj và testbench cần thiết để thực hiện các thí nghiệm trong đồ án.
 
-- [ ] Review lại phân công công việc trong Mục 6.4 để thống nhất với GV.
-- [ ] Trình bày Sect 1, 2, 3 theo khung Mục 7 để GV duyệt trước khi thống nhất về bài toán AI.
-- [ ] Dựng pipeline thực nghiệm sớm (đo baseline trước) để có số liệu xuyên suốt.
-- [ ] Phân công 2 thành viên theo Mục 6.4 và thống nhất mốc thời gian với GV.
+<!-- STATUS
+Đã có thống nhất nhưng chưa mua.
+-->
+
+- [x] Review lại phân công công việc trong Mục 6.4 để thống nhất với GV.
+- [ ] Bổ sung file báo cáo riêng biệt để làm tổng hợp nghiên cứu và thực hiện literature review cho báo cáo đồ án CE201.
+- [ ] @! TID PCB-003[epic=ALGO] <+ Chuyển đổi schematic sang PCB design để thực hiện việc in ấn PCB cho thí nghiệm CE201.
