@@ -1,0 +1,17 @@
+Tests/UnitTest/TestCases/*/Unity/TestRunner/*
+Tests/UnitTest/TestCases/*/Unity/TestRunner/*
+Tests/UnitTest/TestCases/TestData/*/*.tflite
+Tests/UnitTest/TestCases/TestData/*.json
+Tests/UnitTest/TestCases/TestData/*/*.json
+Tests/UnitTest/TestCases/TestData/*/schema_generated.h
+Tests/UnitTest/PregeneratedData/*
+Tests/UnitTest/Output/*
+Tests/UnitTest/Unity/*
+Tests/UnitTest/downloads/*
+Tests/UnitTest/build-cortex-m*
+build
+output
+__pycache__
+*.bak
+# Output of the linkchecker tool
+linkchecker-out.csv
