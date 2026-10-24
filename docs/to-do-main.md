@@ -59,7 +59,7 @@ Tuy nhiên ở repo PdM-AF đã có sẵn các bài báo nghiên cứu cần th�
 # DEPRECATED - Old TASK - Phân công nhiệm vụ cho các thành viên trong nhóm để thực hiện literature review và tổng hợp lại thành một tài liệu chung.
 -->
 
-- [x] @! TID REPO-003 <+ Bổ sung lại thông tin các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
+- [x] @! TID REPO-001 <+ Bổ sung lại thông tin các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
 - [x] @! TID PCB-003[epic=PCB] <+ Bổ sung sử dụng LTSpice để mô phỏng mạch điện tử trong schematic và PCB design của repo PdM cũ.
 
 <!-- STATUS
@@ -77,7 +77,7 @@ Cần cân nhắc bổ sung review của thầy Nguyên để đảm bảo tính
 Đã có schematic chi tiết có thể triển khai cập nhật vào PCB design của repo PdM cũ. Cần cân nhắc bổ sung review của thầy Nguyên để đảm bảo tính đúng đắn của thiết kế.
 -->
 
-- [ ] @! TID MCU-001[epic=MCU] <+ Bổ sung hoàn chỉnh các API cần thiết cho lớp PAL trên hardware chủ chốt STM32H723 và ESP32S3
+- [x] @! TID MCU-001[epic=MCU] <+ Bổ sung hoàn chỉnh các API cần thiết cho lớp PAL trên hardware chủ chốt STM32H723 và ESP32S3
 
 <!-- SECTION
 
@@ -95,17 +95,23 @@ Do đó, BSP của các MCU chủ chốt chỉ cần được khai báo toàn b�
 #!SECTION
 -->
 
-- [ ] Thống nhất về bộ công cụ sử dụng cho toàn bộ đồ án. //NOTE - chỗ này sẽ bao gồm các công cụ về content, code, version control, CI/CD, testing, v.v. để thống nhất với GV.
+- [x] @! TID DOCS-003 <+ Thống nhất về bộ công cụ sử dụng cho toàn bộ đồ án.
 
 <!-- REVIEW
 Version control: GitHub/Git
 IDE: VSCode, STM32CubeIDE/CubeMX, ESP-IDF
-Content: VSCode, Comment Anchor, Google Docs
+Content: VSCode, Comment Anchor, Google Docs, Notion
 -->
 
-- [ ] Sắp xếp meeting với GV để thống nhất hướng đi và timeline.
+- [x] Sắp xếp meeting với GV để thống nhất hướng đi và timeline.
 - [ ] Thống nhất về các testobj và testbench cần thiết để thực hiện các thí nghiệm trong đồ án.
-- [ ] Thống nhất về timeline và release selection của μEDP nhằm đảm bảo tính ổn định.
+- [x] @! TID REPO-002 <+ Thống nhất về timeline và release selection của μEDP nhằm đảm bảo tính ổn định.
+
+<!-- STATUS
+Timeline hiện tại đã thống nhất theo mốc M0-M5 của đồ án 1.
+μEDP đã chốt ở release v1.1.6 để đảm bảo tính ổn định cho việc thực hiện thí nghiệm trong đồ án. Tuy nhiên nếu tồn tại các bản bugfix thì vẫn có thể chuyển sang nhưng không chuyển sang phiên bản mới hơn v1.1.6.
+-->
+
 - [ ] Review lại phân công công việc trong Mục 6.4 để thống nhất với GV.
 - [ ] Trình bày Sect 1, 2, 3 theo khung Mục 7 để GV duyệt trước khi thống nhất về bài toán AI.
 - [ ] Dựng pipeline thực nghiệm sớm (đo baseline trước) để có số liệu xuyên suốt.
