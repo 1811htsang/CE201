@@ -104,13 +104,14 @@ Content: VSCode, Comment Anchor, Google Docs, Notion
 -->
 
 - [x] Sắp xếp meeting với GV để thống nhất hướng đi và timeline.
-- [ ] Thống nhất về các testobj và testbench cần thiết để thực hiện các thí nghiệm trong đồ án.
 - [x] @! TID REPO-002 <+ Thống nhất về timeline và release selection của μEDP nhằm đảm bảo tính ổn định.
 
 <!-- STATUS
 Timeline hiện tại đã thống nhất theo mốc M0-M5 của đồ án 1.
 μEDP đã chốt ở release v1.1.6 để đảm bảo tính ổn định cho việc thực hiện thí nghiệm trong đồ án. Tuy nhiên nếu tồn tại các bản bugfix thì vẫn có thể chuyển sang nhưng không chuyển sang phiên bản mới hơn v1.1.6.
 -->
+
+- [ ] Thống nhất về các testobj và testbench cần thiết để thực hiện các thí nghiệm trong đồ án.
 
 - [ ] Review lại phân công công việc trong Mục 6.4 để thống nhất với GV.
 - [ ] Trình bày Sect 1, 2, 3 theo khung Mục 7 để GV duyệt trước khi thống nhất về bài toán AI.
