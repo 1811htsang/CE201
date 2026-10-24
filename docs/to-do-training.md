@@ -5,18 +5,24 @@
 ## Phase 0 — Chuẩn bị môi trường & dữ liệu thô
 
 - [ ] Tạo virtualenv/conda env riêng, cài `tensorflow`, `librosa`, `numpy`, `pandas`, `scipy`
-- [ ] Tải **UOEMD-VAFCVS** từ Mendeley (DOI 10.17632/msxs4vj48g)
-- [ ] Tải **UORED-VAFCLS** từ Mendeley
-- [ ] Tải **GUET Multi-Condition Acoustic Ball Bearing** từ Mendeley
-- [ ] Tìm/cài tool đọc file `.bkc` của GUET (SDK B&K Connect, hoặc tool convert cộng đồng) — xác nhận đọc được trước khi code pipeline
-- [ ] Review nhanh 1 file mẫu mỗi bộ bằng tay (mở `.mat`/`.csv` bằng `scipy.io.loadmat`/`pandas`, nghe thử `.bkc` sau khi convert) — xác nhận đúng số kênh, đúng tần số ghi trong paper
+- [x] Tải **UOEMD-VAFCVS** từ Mendeley (DOI 10.17632/msxs4vj48g)
+- [x] Tải **UORED-VAFCLS** từ Mendeley
+- [x] Tải **GUET Multi-Condition Acoustic Ball Bearing** từ Mendeley
+- [x] Tìm/cài tool đọc file `.bkc` của GUET (SDK B&K Connect, hoặc tool convert cộng đồng) — xác nhận đọc được trước khi code pipeline
+- [x] Review nhanh 1 file mẫu mỗi bộ bằng tay (mở `.mat`/`.csv` bằng `scipy.io.loadmat`/`pandas`, nghe thử `.bkc` sau khi convert) — xác nhận đúng số kênh, đúng tần số ghi trong paper
 
 ## Phase 1 — Chuẩn hoá dữ liệu thô → `manifest.csv`
 
-- [ ] Viết script đọc `.mat`/`.csv` của UOEMD-VAFCVS/UORED-VAFCLS, trích đúng cột âm thanh (microphone), bỏ các cột accelerometer/tải/tốc độ (hoặc giữ lại làm metadata riêng)
-- [ ] Viết script convert `.bkc` (GUET) → `.wav`/numpy array
-- [ ] Viết script resample chung về 32kHz cho cả 3 bộ (42k→32k, 32.768k→32k) — dùng bộ lọc anti-alias (`scipy.signal.resample_poly` hoặc `librosa.resample`), không decimate thô
-- [ ] Với GUET: cắt file liên tục 10 phút thành các đoạn ngắn hơn (khớp độ dài cửa sổ dùng ở Phase 3), gán nhãn theo đúng mốc thời gian chuyển trạng thái lỗi ghi trong paper
+- [x] Viết script đọc `.mat`/`.csv` của UOEMD-VAFCVS/UORED-VAFCLS, trích đúng cột âm thanh (microphone), bỏ các cột accelerometer/tải/tốc độ (hoặc giữ lại làm metadata riêng)
+- [x] Viết script convert `.bkc` (GUET) → `.wav`/numpy array
+- [x] Viết script resample chung về 32kHz cho cả 3 bộ (42k→32k, 32.768k→32k) — dùng bộ lọc anti-alias (`scipy.signal.resample_poly` hoặc `librosa.resample`), không decimate thô
+- [x] Với GUET: cắt file liên tục 10 phút thành các đoạn ngắn hơn (khớp độ dài cửa sổ dùng ở Phase 3), gán nhãn theo đúng mốc thời gian chuyển trạng thái lỗi ghi trong paper
+
+<!-- STATUS
+Đã cập nhật thông tin theo tiến độ T12 - 11/10/26. 
+Hiện tai đã trễ tiến độ, dự trù hoàn thành bắt buộc trước 29/10/26.
+-->
+
 - [ ] Thiết kế schema `manifest.csv`: tối thiểu `file_path, label (normal/abnormal), source_dataset, fault_type, rpm, load, duration_s`
 - [ ] Viết script quét toàn bộ dữ liệu đã chuẩn hoá, sinh `manifest.csv`
 - [ ] Sanity check: đếm số file/giây audio theo từng `label` và từng `source_dataset` — phát hiện sớm nếu lệch nhãn hoặc tập quá mất cân bằng
