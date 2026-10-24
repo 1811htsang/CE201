@@ -76,4 +76,6 @@ lib-cmsisnn/*.bak
 # Output of the linkchecker tool
 lib-cmsisnn/linkchecker-out.csv
 
+# Project files
 phy-prjecobj-h723/.settings/**
+phy-prjecobj-h723/Debug/**
