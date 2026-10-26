@@ -119,6 +119,7 @@ Timeline hiện tại đã thống nhất theo mốc M0-M5 của đồ án 1.
 
 - [x] Review lại phân công công việc trong Mục 6.4 để thống nhất với GV.
 - [ ] Bổ sung file báo cáo riêng biệt để làm tổng hợp nghiên cứu và thực hiện literature review cho báo cáo đồ án CE201.
-- [ ] @! TID PCB-003[epic=ALGO] <+ Chuyển đổi schematic sang PCB design để thực hiện việc in ấn PCB cho thí nghiệm CE201.
+- [x] @! TID PCB-003[epic=ALGO] <+ Chuyển đổi schematic sang PCB design để thực hiện việc in ấn PCB cho thí nghiệm CE201.
+- [ ] @! TID PCB-004[epic=ALGO] <+ Bổ sung chân mạch trung gian 20x02 để khớp với chân mạch H723.
 - [ ] @! TID MCU-002[epic=MCU] <+ Bổ sung các I2S API cho uutobj H723.
 - [ ] @! TID MCU-003[epic=MCU] <+ Thiết kế lstaxizer.yaml cho đồ án.
