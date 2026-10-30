@@ -59,8 +59,8 @@ Tuy nhiên ở repo PdM-AF đã có sẵn các bài báo nghiên cứu cần th�
 # DEPRECATED - Old TASK - Phân công nhiệm vụ cho các thành viên trong nhóm để thực hiện literature review và tổng hợp lại thành một tài liệu chung.
 -->
 
-- [x] @! TID REPO-001 <+ Bổ sung lại thông tin các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
-- [x] @! TID PCB-001[epic=PCB] <+ Bổ sung sử dụng LTSpice để mô phỏng mạch điện tử trong schematic và PCB design của repo PdM cũ.
+- [x] @! TID[epic=REPO,seq=62] REPO-001 <+ Bổ sung lại thông tin các bài báo nghiên cứu cần thực hiện literature review trong tài liệu.
+- [x] @! TID[epic=PCB] PCB-001 <+ Bổ sung sử dụng LTSpice để mô phỏng mạch điện tử trong schematic và PCB design của repo PdM cũ.
 
 <!-- STATUS
 Đã bổ sung sử dụng LTSpice để mô tả và thiết kế mạch khuếch đại tín hiệu thay thế cho thiết kế schematics và PCB design của repo PdM cũ. 
@@ -68,16 +68,16 @@ Tuy nhiên ở repo PdM-AF đã có sẵn các bài báo nghiên cứu cần th�
 Cần cân nhắc bổ sung review của thầy Nguyên để đảm bảo tính đúng đắn của thiết kế.
 -->
 
-- [x] @! TID INF-001[epic=ALGO] <+ Bổ sung lộ trình thiết kế API chi tiết cho thuật toán sẽ sử dụng. -> Minh đang làm.
-- [x] @! TID INF-002[epic=ALGO] <+ Bổ sung tài liệu tracking làm việc cho pipeline training model.
-- [ ] @! DEPRECATED PCB-002[epic=PCB] <+ Cập nhật và sửa đổi PCB design với TCT40-16R thay bằng INMP441.
-- [x] @! TID PCB-002[epic=ALGO] <+ Hoàn thiện việc mô tả và thiết kế mạch khuếch đại tín hiệu thay thế cho thiết kế schematics và PCB design của repo PdM cũ bằng LTSpice.
+- [x] @! TID[epic=ALGO] INF-001 <+ Bổ sung lộ trình thiết kế API chi tiết cho thuật toán sẽ sử dụng. -> Minh đang làm.
+- [x] @! TID[epic=ALGO] INF-002 <+ Bổ sung tài liệu tracking làm việc cho pipeline training model.
+- [ ] @! DEPRECATED PCB-002 <+ Cập nhật và sửa đổi PCB design với TCT40-16R thay bằng INMP441.
+- [x] @! TID[epic=ALGO] PCB-002 <+ Hoàn thiện việc mô tả và thiết kế mạch khuếch đại tín hiệu thay thế cho thiết kế schematics và PCB design của repo PdM cũ bằng LTSpice.
 
 <!-- STATUS
 Đã có schematic chi tiết có thể triển khai cập nhật vào PCB design của repo PdM cũ. Cần cân nhắc bổ sung review của thầy Nguyên để đảm bảo tính đúng đắn của thiết kế.
 -->
 
-- [x] @! TID MCU-001[epic=MCU] <+ Bổ sung hoàn chỉnh các API cần thiết cho lớp PAL trên hardware chủ chốt STM32H723 và ESP32S3
+- [x] @! TID[epic=MCU] MCU-001 <+ Bổ sung hoàn chỉnh các API cần thiết cho lớp PAL trên hardware chủ chốt STM32H723 và ESP32S3
 
 <!-- SECTION
 
@@ -95,7 +95,7 @@ Do đó, BSP của các MCU chủ chốt chỉ cần được khai báo toàn b�
 #!SECTION
 -->
 
-- [x] @! TID DOCS-003 <+ Thống nhất về bộ công cụ sử dụng cho toàn bộ đồ án.
+- [x] @! TID[epic=DOCS] DOCS-003 <+ Thống nhất về bộ công cụ sử dụng cho toàn bộ đồ án.
 
 <!-- REVIEW
 Version control: GitHub/Git
@@ -104,7 +104,7 @@ Content: VSCode, Comment Anchor, Google Docs, Notion
 -->
 
 - [x] Sắp xếp meeting với GV để thống nhất hướng đi và timeline.
-- [x] @! TID REPO-002 <+ Thống nhất về timeline và release selection của μEDP nhằm đảm bảo tính ổn định.
+- [x] @! TID[epic=REPO,seq=107] REPO-002 <+ Thống nhất về timeline và release selection của μEDP nhằm đảm bảo tính ổn định.
 
 <!-- STATUS
 Timeline hiện tại đã thống nhất theo mốc M0-M5 của đồ án 1.
@@ -119,8 +119,11 @@ Timeline hiện tại đã thống nhất theo mốc M0-M5 của đồ án 1.
 
 - [x] Review lại phân công công việc trong Mục 6.4 để thống nhất với GV.
 - [ ] Bổ sung file báo cáo riêng biệt để làm tổng hợp nghiên cứu và thực hiện literature review cho báo cáo đồ án CE201.
-- [x] @! TID PCB-003[epic=ALGO] <+ Chuyển đổi schematic sang PCB design để thực hiện việc in ấn PCB cho thí nghiệm CE201.
-- [x] @! TID PCB-005[epic=ALGO] <+ Cập nhật chân 1x5 header lên 1x6 theo mạch PCM1808.
-- [ ] @! TID PCB-004[epic=ALGO] <+ Bổ sung mạch trung gian 2x20 để khớp với chân mạch H723 và hỗ trợ mapping chân header 1x6 sang 2x20.
-- [ ] @! TID MCU-002[epic=MCU] <+ Bổ sung các I2S API cho uutobj H723.
-- [ ] @! TID MCU-003[epic=MCU] <+ Thiết kế lstaxizer.yaml cho đồ án.
+- [x] @! TID[epic=PCB,seq=64] PCB-003 <+ Chuyển đổi schematic sang PCB design để thực hiện việc in ấn PCB cho thí nghiệm CE201.
+- [x] @! TID[epic=PCB,seq=65] PCB-005 <+ Cập nhật chân 1x5 header lên 1x6 theo mạch PCM1808.
+- [x] @! TID[epic=ORDER,seq=127] PCB-006 <+ Bổ sung linh kiện motor và các thiết kế cho testbench.
+- [ ] @! TID[epic=ORDER,seq=128] PCB-007 <+ Cập nhật bổ sung thanh trượt 10mm/8mm với ốc M2 dài 6mm để khóa trục.
+- [ ] @! TID[epic=ORDER,seq=129] PCB-008 <+ Thực hiện đặt gia công mạch PCB cho thí nghiệm CE201.
+- [ ] @! TID[epic=PCB,seq=66] PCB-004 <+ Bổ sung mạch trung gian 2x20 để khớp với chân mạch H723 và hỗ trợ mapping chân header 1x6 sang 2x20.
+- [ ] @! TID[epic=MCU,seq=81] MCU-002 <+ Bổ sung các I2S API cho uutobj H723.
+- [ ] @! TID[epic=MCU,seq=82] MCU-003 <+ Thiết kế lstaxizer.yaml cho đồ án.
