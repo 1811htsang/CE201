@@ -123,7 +123,7 @@ Timeline hiện tại đã thống nhất theo mốc M0-M5 của đồ án 1.
 - [x] @! TID[epic=PCB,seq=65] PCB-005 <+ Cập nhật chân 1x5 header lên 1x6 theo mạch PCM1808.
 - [x] @! TID[epic=ORDER,seq=127] PCB-006 <+ Bổ sung linh kiện motor và các thiết kế cho testbench.
 - [ ] @! TID[epic=ORDER,seq=128] PCB-007 <+ Cập nhật bổ sung thanh trượt 10mm/8mm với ốc M2 dài 6mm để khóa trục.
-- [ ] @! TID[epic=ORDER,seq=129] PCB-008 <+ Thực hiện đặt gia công mạch PCB cho thí nghiệm CE201.
-- [ ] @! TID[epic=PCB,seq=66] PCB-004 <+ Bổ sung mạch trung gian 2x20 để khớp với chân mạch H723 và hỗ trợ mapping chân header 1x6 sang 2x20.
-- [ ] @! TID[epic=MCU,seq=81] MCU-002 <+ Bổ sung các I2S API cho uutobj H723.
+- [x] @! TID[epic=ORDER,seq=129] PCB-008 <+ Thực hiện đặt gia công mạch PCB cho thí nghiệm CE201.
+- [x] @! TID[epic=PCB,seq=66] PCB-004 <+ Bổ sung mạch trung gian 2x20 để khớp với chân mạch H723 và hỗ trợ mapping chân header 1x6 sang 2x20.
+- [x] @! TID[epic=MCU,seq=81] MCU-002 <+ Bổ sung các I2S API cho uutobj H723.
 - [ ] @! TID[epic=MCU,seq=82] MCU-003 <+ Thiết kế lstaxizer.yaml cho đồ án.
