@@ -18,6 +18,9 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "fatfs.h"
+#include <stdio.h>
+#include <string.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -31,6 +34,12 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define I2S_SAMPLE_RATE        32000U
+#define RECORDING_SECONDS      10U
+#define RECORDING_SAMPLES      (I2S_SAMPLE_RATE * RECORDING_SECONDS)
+#define I2S_DMA_SAMPLES        2048U
+#define I2S_DMA_HALF_SAMPLES   (I2S_DMA_SAMPLES / 2U)
+#define UART_TX_TIMEOUT_MS     100U
 
 /* USER CODE END PD */
 
@@ -50,6 +59,14 @@ UART_HandleTypeDef hlpuart1;
 SD_HandleTypeDef hsd1;
 
 /* USER CODE BEGIN PV */
+/* DMA1 can access D2 SRAM; the linker places this section at 0x30000000. */
+__attribute__((section(".dma_buffer"), aligned(32)))
+static uint32_t i2s_tx_silence[I2S_DMA_SAMPLES];
+__attribute__((section(".dma_buffer"), aligned(32)))
+static uint32_t i2s_rx_buffer[I2S_DMA_SAMPLES];
+
+static volatile uint32_t i2s_ready_mask;
+static volatile uint32_t i2s_dma_error;
 
 /* USER CODE END PV */
 
@@ -62,11 +79,38 @@ static void MX_I2S1_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_SDMMC1_SD_Init(void);
 /* USER CODE BEGIN PFP */
+static void RecordI2S10Seconds(void);
+static void ProcessI2SBlock(const uint32_t *samples, uint32_t count,
+                            FIL *file, uint32_t *sample_index);
+static int32_t DecodeI2S24(uint32_t raw_sample);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void HAL_I2SEx_TxRxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
+{
+  if (hi2s == &hi2s1)
+  {
+    i2s_ready_mask |= 1U;
+  }
+}
+
+void HAL_I2SEx_TxRxCpltCallback(I2S_HandleTypeDef *hi2s)
+{
+  if (hi2s == &hi2s1)
+  {
+    i2s_ready_mask |= 2U;
+  }
+}
+
+void HAL_I2S_ErrorCallback(I2S_HandleTypeDef *hi2s)
+{
+  if (hi2s == &hi2s1)
+  {
+    i2s_dma_error = 1U;
+  }
+}
 
 /* USER CODE END 0 */
 
@@ -106,7 +150,9 @@ int main(void)
   MX_I2S1_Init();
   MX_LPUART1_UART_Init();
   MX_SDMMC1_SD_Init();
+  MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  RecordI2S10Seconds();
 
   /* USER CODE END 2 */
 
@@ -136,7 +182,7 @@ void SystemClock_Config(void)
 
   /** Configure the main internal regulator output voltage
   */
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   while(!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY)) {}
 
@@ -148,12 +194,12 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.HSICalibrationValue = 64;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 32;
-  RCC_OscInitStruct.PLL.PLLN = 129;
-  RCC_OscInitStruct.PLL.PLLP = 2;
-  RCC_OscInitStruct.PLL.PLLQ = 2;
+  RCC_OscInitStruct.PLL.PLLM = 4;
+  RCC_OscInitStruct.PLL.PLLN = 12;
+  RCC_OscInitStruct.PLL.PLLP = 1;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
   RCC_OscInitStruct.PLL.PLLR = 2;
-  RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_1;
+  RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_3;
   RCC_OscInitStruct.PLL.PLLVCOSEL = RCC_PLL1VCOWIDE;
   RCC_OscInitStruct.PLL.PLLFRACN = 0;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
@@ -166,15 +212,15 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2
                               |RCC_CLOCKTYPE_D3PCLK1|RCC_CLOCKTYPE_D1PCLK1;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV1;
-  RCC_ClkInitStruct.APB3CLKDivider = RCC_APB3_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV1;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV1;
-  RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV1;
+  RCC_ClkInitStruct.APB3CLKDivider = RCC_APB3_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV2;
+  RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -198,7 +244,7 @@ static void MX_I2S1_Init(void)
   hi2s1.Instance = SPI1;
   hi2s1.Init.Mode = I2S_MODE_MASTER_FULLDUPLEX;
   hi2s1.Init.Standard = I2S_STANDARD_PHILIPS;
-  hi2s1.Init.DataFormat = I2S_DATAFORMAT_16B;
+  hi2s1.Init.DataFormat = I2S_DATAFORMAT_24B;
   hi2s1.Init.MCLKOutput = I2S_MCLKOUTPUT_DISABLE;
   hi2s1.Init.AudioFreq = I2S_AUDIOFREQ_32K;
   hi2s1.Init.CPOL = I2S_CPOL_LOW;
@@ -232,7 +278,7 @@ static void MX_LPUART1_UART_Init(void)
 
   /* USER CODE END LPUART1_Init 1 */
   hlpuart1.Instance = LPUART1;
-  hlpuart1.Init.BaudRate = 209700;
+  hlpuart1.Init.BaudRate = 3000000;
   hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
   hlpuart1.Init.StopBits = UART_STOPBITS_1;
   hlpuart1.Init.Parity = UART_PARITY_NONE;
@@ -284,7 +330,7 @@ static void MX_SDMMC1_SD_Init(void)
   hsd1.Init.ClockPowerSave = SDMMC_CLOCK_POWER_SAVE_DISABLE;
   hsd1.Init.BusWide = SDMMC_BUS_WIDE_4B;
   hsd1.Init.HardwareFlowControl = SDMMC_HARDWARE_FLOW_CONTROL_DISABLE;
-  hsd1.Init.ClockDiv = 0;
+  hsd1.Init.ClockDiv = 8;
   if (HAL_SD_Init(&hsd1) != HAL_OK)
   {
     Error_Handler();
@@ -337,6 +383,140 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+static int32_t DecodeI2S24(uint32_t raw_sample)
+{
+  int32_t sample = (int32_t)(raw_sample & 0x00FFFFFFU);
+
+  if ((sample & 0x00800000L) != 0)
+  {
+    sample |= (int32_t)0xFF000000L;
+  }
+
+  return sample;
+}
+
+static void ProcessI2SBlock(const uint32_t *samples, uint32_t count,
+                            FIL *file, uint32_t *sample_index)
+{
+  static char csv_buffer[20480];
+  UINT csv_length = 0U;
+  UINT bytes_written = 0U;
+
+  if (HAL_UART_Transmit(&hlpuart1, (const uint8_t *)samples,
+                        (uint16_t)(count * sizeof(uint32_t)),
+                        UART_TX_TIMEOUT_MS) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  for (uint32_t index = 0U; index < count; ++index)
+  {
+    int32_t sample = DecodeI2S24(samples[index]);
+    int written = snprintf(&csv_buffer[csv_length],
+                           sizeof(csv_buffer) - csv_length,
+                           "%lu,%ld\r\n",
+                           (unsigned long)*sample_index, (long)sample);
+    if ((written < 0) || ((UINT)written >= (sizeof(csv_buffer) - csv_length)))
+    {
+      Error_Handler();
+    }
+    csv_length += (UINT)written;
+    (*sample_index)++;
+  }
+
+  if ((f_write(file, csv_buffer, csv_length, &bytes_written) != FR_OK) ||
+      (bytes_written != csv_length))
+  {
+    Error_Handler();
+  }
+}
+
+static void RecordI2S10Seconds(void)
+{
+  char file_path[24];
+  uint32_t sample_index = 0U;
+  FRESULT result;
+
+  if (retSD != 0U)
+  {
+    Error_Handler();
+  }
+
+  result = f_mount(&SDFatFS, (TCHAR const *)SDPath, 1U);
+  if (result != FR_OK)
+  {
+    Error_Handler();
+  }
+
+  (void)snprintf(file_path, sizeof(file_path), "%si2s_32k_10s.csv", SDPath);
+  result = f_open(&SDFile, file_path, FA_CREATE_ALWAYS | FA_WRITE);
+  if (result != FR_OK)
+  {
+    Error_Handler();
+  }
+
+  {
+    static const char header[] = "sample_index,sample_24bit\r\n";
+    UINT bytes_written = 0U;
+    if ((f_write(&SDFile, header, sizeof(header) - 1U, &bytes_written) != FR_OK) ||
+        (bytes_written != sizeof(header) - 1U))
+    {
+      Error_Handler();
+    }
+  }
+
+  memset(i2s_tx_silence, 0, sizeof(i2s_tx_silence));
+  i2s_ready_mask = 0U;
+  i2s_dma_error = 0U;
+  if (HAL_I2SEx_TransmitReceive_DMA(&hi2s1, (const uint16_t *)i2s_tx_silence,
+                                    (uint16_t *)i2s_rx_buffer,
+                                    I2S_DMA_SAMPLES) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  while (sample_index < RECORDING_SAMPLES)
+  {
+    uint32_t ready = i2s_ready_mask;
+    if (i2s_dma_error != 0U)
+    {
+      Error_Handler();
+    }
+
+    if ((ready & 1U) != 0U)
+    {
+      i2s_ready_mask &= ~1U;
+      uint32_t count = RECORDING_SAMPLES - sample_index;
+      if (count > I2S_DMA_HALF_SAMPLES)
+      {
+        count = I2S_DMA_HALF_SAMPLES;
+      }
+      ProcessI2SBlock(i2s_rx_buffer, count, &SDFile, &sample_index);
+    }
+    else if ((ready & 2U) != 0U)
+    {
+      i2s_ready_mask &= ~2U;
+      uint32_t count = RECORDING_SAMPLES - sample_index;
+      if (count > I2S_DMA_HALF_SAMPLES)
+      {
+        count = I2S_DMA_HALF_SAMPLES;
+      }
+      ProcessI2SBlock(&i2s_rx_buffer[I2S_DMA_HALF_SAMPLES], count,
+                      &SDFile, &sample_index);
+    }
+  }
+
+  (void)HAL_I2S_DMAStop(&hi2s1);
+  if (f_sync(&SDFile) != FR_OK)
+  {
+    Error_Handler();
+  }
+  if (f_close(&SDFile) != FR_OK)
+  {
+    Error_Handler();
+  }
+  (void)f_mount(NULL, (TCHAR const *)SDPath, 0U);
+}
 
 /* USER CODE END 4 */
 
