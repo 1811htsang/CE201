@@ -58,3 +58,8 @@ lib-cmsisnn/build/**
 # Project files
 phy-prjecobj-h723/.settings/**
 phy-prjecobj-h723/Debug/**
+
+# Backup project files
+# Project files
+phy-prjecobj-h723-pacup/.settings/**
+phy-prjecobj-h723-pacup/Debug/**
