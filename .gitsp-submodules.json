@@ -2,5 +2,9 @@
   "feat": {
     "phy-prjecobj-h723/uEDP": "feat",
     "PdM-AF": "feat"
+  },
+  "docs": {
+    "PdM-AF": "docs",
+    "phy-prjecobj-h723/uEDP": "feat"
   }
 }
