@@ -37,9 +37,12 @@
 #define I2S_SAMPLE_RATE        32000U
 #define RECORDING_SECONDS      10U
 #define RECORDING_SAMPLES      (I2S_SAMPLE_RATE * RECORDING_SECONDS)
+#define RECORDING_RAW_SAMPLES  (RECORDING_SAMPLES * 2U)
 #define I2S_DMA_SAMPLES        2048U
 #define I2S_DMA_HALF_SAMPLES   (I2S_DMA_SAMPLES / 2U)
 #define UART_TX_TIMEOUT_MS     100U
+#define UART_CONSOLE_BUFFER_SIZE 1024U
+#define UART_SAMPLE_DECIMATION 32U
 
 /* USER CODE END PD */
 
@@ -83,6 +86,7 @@ static void RecordI2S10Seconds(void);
 static void ProcessI2SBlock(const uint32_t *samples, uint32_t count,
                             FIL *file, uint32_t *sample_index);
 static int32_t DecodeI2S24(uint32_t raw_sample);
+static void TransmitUartText(const char *text, uint16_t length);
 
 /* USER CODE END PFP */
 
@@ -149,6 +153,10 @@ int main(void)
   MX_DMA_Init();
   MX_I2S1_Init();
   MX_LPUART1_UART_Init();
+  {
+    static const char uart_banner[] = "UART OK - 115200 8N1\r\n";
+    TransmitUartText(uart_banner, (uint16_t)(sizeof(uart_banner) - 1U));
+  }
   MX_SDMMC1_SD_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
@@ -278,7 +286,7 @@ static void MX_LPUART1_UART_Init(void)
 
   /* USER CODE END LPUART1_Init 1 */
   hlpuart1.Instance = LPUART1;
-  hlpuart1.Init.BaudRate = 3000000;
+  hlpuart1.Init.BaudRate = 115200;
   hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
   hlpuart1.Init.StopBits = UART_STOPBITS_1;
   hlpuart1.Init.Parity = UART_PARITY_NONE;
@@ -395,23 +403,35 @@ static int32_t DecodeI2S24(uint32_t raw_sample)
   return sample;
 }
 
-static void ProcessI2SBlock(const uint32_t *samples, uint32_t count,
-                            FIL *file, uint32_t *sample_index)
+static void TransmitUartText(const char *text, uint16_t length)
 {
-  static char csv_buffer[20480];
-  UINT csv_length = 0U;
-  UINT bytes_written = 0U;
-
-  if (HAL_UART_Transmit(&hlpuart1, (const uint8_t *)samples,
-                        (uint16_t)(count * sizeof(uint32_t)),
+  if (HAL_UART_Transmit(&hlpuart1, (const uint8_t *)text, length,
                         UART_TX_TIMEOUT_MS) != HAL_OK)
   {
     Error_Handler();
   }
+}
 
-  for (uint32_t index = 0U; index < count; ++index)
+static void ProcessI2SBlock(const uint32_t *samples, uint32_t count,
+                            FIL *file, uint32_t *sample_index)
+{
+  static char csv_buffer[20480];
+  static int32_t mono_audio[I2S_DMA_HALF_SAMPLES / 2U];
+  char text_buffer[UART_CONSOLE_BUFFER_SIZE];
+  UINT csv_length = 0U;
+  uint16_t text_length = 0U;
+  UINT bytes_written = 0U;
+  uint32_t mono_count = 0U;
+
+  for (uint32_t index = 0U; index < count; index += 2U)
   {
     int32_t sample = DecodeI2S24(samples[index]);
+    mono_audio[mono_count++] = sample;
+  }
+
+  for (uint32_t index = 0U; index < mono_count; ++index)
+  {
+    int32_t sample = mono_audio[index];
     int written = snprintf(&csv_buffer[csv_length],
                            sizeof(csv_buffer) - csv_length,
                            "%lu,%ld\r\n",
@@ -421,7 +441,38 @@ static void ProcessI2SBlock(const uint32_t *samples, uint32_t count,
       Error_Handler();
     }
     csv_length += (UINT)written;
+
+    /*
+     * Only transmit printable ASCII. Sending the raw I2S word here would
+     * make the UART terminal decode arbitrary bytes as replacement characters.
+     */
+    if (((*sample_index % UART_SAMPLE_DECIMATION) == 0U))
+    {
+      int text_written = snprintf(&text_buffer[text_length],
+                                  sizeof(text_buffer) - text_length,
+                                  "[%06lu] %ld\r\n",
+                                  (unsigned long)*sample_index,
+                                  (long)sample);
+      if ((text_written < 0) ||
+          ((uint16_t)text_written >= (sizeof(text_buffer) - text_length)))
+      {
+        Error_Handler();
+      }
+
+      text_length += (uint16_t)text_written;
+      if (text_length > (sizeof(text_buffer) - 32U))
+      {
+        TransmitUartText(text_buffer, text_length);
+        text_length = 0U;
+      }
+    }
+
     (*sample_index)++;
+  }
+
+  if (text_length != 0U)
+  {
+    TransmitUartText(text_buffer, text_length);
   }
 
   if ((f_write(file, csv_buffer, csv_length, &bytes_written) != FR_OK) ||
@@ -465,6 +516,13 @@ static void RecordI2S10Seconds(void)
     }
   }
 
+  {
+    static const char console_header[] =
+        "\r\n=== INMP441 I2S capture ===\r\n"
+        "index    signed decimal\r\n";
+    TransmitUartText(console_header, (uint16_t)(sizeof(console_header) - 1U));
+  }
+
   memset(i2s_tx_silence, 0, sizeof(i2s_tx_silence));
   i2s_ready_mask = 0U;
   i2s_dma_error = 0U;
@@ -486,7 +544,8 @@ static void RecordI2S10Seconds(void)
     if ((ready & 1U) != 0U)
     {
       i2s_ready_mask &= ~1U;
-      uint32_t count = RECORDING_SAMPLES - sample_index;
+      uint32_t raw_sample_index = sample_index * 2U;
+      uint32_t count = RECORDING_RAW_SAMPLES - raw_sample_index;
       if (count > I2S_DMA_HALF_SAMPLES)
       {
         count = I2S_DMA_HALF_SAMPLES;
@@ -496,7 +555,8 @@ static void RecordI2S10Seconds(void)
     else if ((ready & 2U) != 0U)
     {
       i2s_ready_mask &= ~2U;
-      uint32_t count = RECORDING_SAMPLES - sample_index;
+      uint32_t raw_sample_index = sample_index * 2U;
+      uint32_t count = RECORDING_RAW_SAMPLES - raw_sample_index;
       if (count > I2S_DMA_HALF_SAMPLES)
       {
         count = I2S_DMA_HALF_SAMPLES;
@@ -516,6 +576,12 @@ static void RecordI2S10Seconds(void)
     Error_Handler();
   }
   (void)f_mount(NULL, (TCHAR const *)SDPath, 0U);
+
+  {
+    static const char console_footer[] =
+        "=== capture complete ===\r\n";
+    TransmitUartText(console_footer, (uint16_t)(sizeof(console_footer) - 1U));
+  }
 }
 
 /* USER CODE END 4 */
