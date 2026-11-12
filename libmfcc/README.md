@@ -8,6 +8,7 @@
 - Caller-owned workspace; no `malloc` is used by the library.
 - `mfcc_compute_frame()` for a DMA frame and `mfcc_compute_frames()` for a contiguous sample buffer.
 - Power-of-two radix-2 FFT and Type-II DCT.
+- Optional CMSIS-DSP backend for `arm_rfft_fast_f32`, `arm_mult_f32`, and `arm_dot_prod_f32`.
 
 ## Build and test
 
@@ -16,6 +17,19 @@ cmake -S libmfcc -B libmfcc/build
 cmake --build libmfcc/build
 ctest --test-dir libmfcc/build --output-on-failure
 ```
+
+To use CMSIS-DSP, provide its include directory and an optional CMake target
+that links the CMSIS-DSP implementation:
+
+```sh
+cmake -S libmfcc -B libmfcc/build-cmsis \
+  -DMFCC_USE_CMSIS_DSP=ON \
+  -DMFCC_CMSIS_DSP_INCLUDE_DIR=/path/to/CMSIS/DSP/Include \
+  -DMFCC_CMSIS_DSP_TARGET=CMSISDSP
+```
+
+The target may be omitted when the application supplies the CMSIS-DSP objects
+and required math libraries separately.
 
 ## STM32 integration
 
