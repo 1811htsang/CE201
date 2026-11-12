@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#if defined(MFCC_USE_CMSIS_DSP)
+#include "arm_math.h"
+#endif
+
 #define MFCC_PI 3.14159265358979323846f
 
 static size_t align_up(size_t value)
@@ -72,6 +76,9 @@ size_t mfcc_workspace_size(const mfcc_config_t *config)
     bytes += (size_t)config->n_mels * bins * sizeof(float);
     bytes += (size_t)config->n_mfcc * config->n_mels * sizeof(float);
     bytes += (size_t)config->n_fft * 2U * sizeof(float);
+#if defined(MFCC_USE_CMSIS_DSP)
+    bytes += sizeof(arm_rfft_fast_instance_f32);
+#endif
     bytes += bins * sizeof(float);
     bytes += (size_t)config->n_mels * sizeof(float);
     bytes += (size_t)config->n_fft * sizeof(float);
@@ -180,6 +187,14 @@ mfcc_status_t mfcc_init(mfcc_context_t *context,
     context->mel_filterbank = take_buffer(&cursor, (size_t)config->n_mels * bins);
     context->dct = take_buffer(&cursor, (size_t)config->n_mfcc * config->n_mels);
     context->fft = take_buffer(&cursor, (size_t)config->n_fft * 2U);
+#if defined(MFCC_USE_CMSIS_DSP)
+    context->fft_instance = take_buffer(&cursor, sizeof(arm_rfft_fast_instance_f32) /
+                                                 sizeof(float));
+    if (arm_rfft_fast_init_f32((arm_rfft_fast_instance_f32 *)context->fft_instance,
+                               config->n_fft) != ARM_MATH_SUCCESS) {
+        return MFCC_ERROR_CONFIG;
+    }
+#endif
     context->power = take_buffer(&cursor, bins);
     context->mel_energy = take_buffer(&cursor, config->n_mels);
     context->frame = take_buffer(&cursor, config->n_fft);
@@ -190,7 +205,7 @@ mfcc_status_t mfcc_init(mfcc_context_t *context,
     return MFCC_OK;
 }
 
-static void fft(mfcc_context_t *context)
+static void fft_reference(mfcc_context_t *context)
 {
     uint32_t n = context->config.n_fft;
     uint32_t i;
@@ -236,6 +251,25 @@ static void fft(mfcc_context_t *context)
     }
 }
 
+#if defined(MFCC_USE_CMSIS_DSP)
+static void compute_power_cmsis(mfcc_context_t *context)
+{
+    uint32_t bins = context->config.n_fft / 2U + 1U;
+    uint32_t k;
+
+    context->power[0] = context->fft[0] * context->fft[0] /
+                        (float)context->config.n_fft;
+    context->power[bins - 1U] = context->fft[1] * context->fft[1] /
+                                (float)context->config.n_fft;
+    for (k = 1U; k < bins - 1U; ++k) {
+        float real = context->fft[2U * k];
+        float imag = context->fft[2U * k + 1U];
+        context->power[k] = (real * real + imag * imag) /
+                           (float)context->config.n_fft;
+    }
+}
+#endif
+
 mfcc_status_t mfcc_compute_frame(mfcc_context_t *context,
                                  const float *samples,
                                  float *output)
@@ -254,21 +288,24 @@ mfcc_status_t mfcc_compute_frame(mfcc_context_t *context,
             mean += samples[i] * config->input_scale;
         }
         mean /= (float)config->n_fft;
-        for (i = 0U; i < config->n_fft; ++i) {
-            context->frame[i] = (samples[i] * config->input_scale - mean) *
-                                context->window[i];
-        }
+        for (i = 0U; i < config->n_fft; ++i)
+            context->frame[i] = samples[i] * config->input_scale - mean;
     } else {
-        for (i = 0U; i < config->n_fft; ++i) {
-            context->frame[i] = samples[i] * config->input_scale * context->window[i];
-        }
+        for (i = 0U; i < config->n_fft; ++i)
+            context->frame[i] = samples[i] * config->input_scale;
     }
 
+#if defined(MFCC_USE_CMSIS_DSP)
+    arm_mult_f32(context->frame, context->window, context->frame, config->n_fft);
+    arm_rfft_fast_f32((arm_rfft_fast_instance_f32 *)context->fft_instance,
+                      context->frame, context->fft, 0);
+    compute_power_cmsis(context);
+#else
     memset(context->fft, 0, (size_t)config->n_fft * 2U * sizeof(float));
     for (i = 0U; i < config->n_fft; ++i) {
         context->fft[2U * i] = context->frame[i];
     }
-    fft(context);
+    fft_reference(context);
 
     bins = config->n_fft / 2U + 1U;
     for (i = 0U; i < bins; ++i) {
@@ -277,25 +314,36 @@ mfcc_status_t mfcc_compute_frame(mfcc_context_t *context,
         context->power[i] = (real * real + imag * imag) /
                             (float)config->n_fft;
     }
+    #endif
 
     for (i = 0U; i < config->n_mels; ++i) {
         float sum = 0.0f;
+    #if !defined(MFCC_USE_CMSIS_DSP)
         uint32_t k;
+    #endif
         const float *filter = context->mel_filterbank + (size_t)i * bins;
-        for (k = 0U; k < bins; ++k) {
+    #if defined(MFCC_USE_CMSIS_DSP)
+        arm_dot_prod_f32(filter, context->power, bins, &sum);
+    #else
+        for (k = 0U; k < bins; ++k)
             sum += filter[k] * context->power[k];
-        }
+    #endif
         context->mel_energy[i] = config->log_scale * log10f(
             sum > config->log_floor ? sum : config->log_floor);
     }
 
     for (i = 0U; i < config->n_mfcc; ++i) {
         float sum = 0.0f;
+    #if !defined(MFCC_USE_CMSIS_DSP)
         uint32_t m;
+    #endif
         const float *row = context->dct + (size_t)i * config->n_mels;
-        for (m = 0U; m < config->n_mels; ++m) {
+    #if defined(MFCC_USE_CMSIS_DSP)
+        arm_dot_prod_f32(row, context->mel_energy, config->n_mels, &sum);
+    #else
+        for (m = 0U; m < config->n_mels; ++m)
             sum += row[m] * context->mel_energy[m];
-        }
+    #endif
         output[i] = sum;
     }
     return MFCC_OK;

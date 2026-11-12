@@ -37,6 +37,7 @@ typedef struct {
     float *mel_filterbank;
     float *dct;
     float *fft;
+    void *fft_instance;
     float *power;
     float *mel_energy;
     float *frame;
