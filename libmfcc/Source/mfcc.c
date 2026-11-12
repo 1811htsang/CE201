@@ -311,12 +311,11 @@ mfcc_status_t mfcc_compute_frames(mfcc_context_t *context,
     size_t frames;
     size_t i;
 
+    if (context == NULL || samples == NULL || output == NULL) {
+        return MFCC_ERROR_ARGUMENT;
+    }
     if (written_frames != NULL) {
         *written_frames = 0U;
-    }
-    if (context == NULL || samples == NULL || output == NULL ||
-        written_frames == NULL) {
-        return MFCC_ERROR_ARGUMENT;
     }
     if (sample_count < context->config.n_fft) {
         return MFCC_OK;
