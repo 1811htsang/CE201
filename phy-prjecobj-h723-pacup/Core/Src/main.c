@@ -19,6 +19,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "fatfs.h"
+#include <stdio.h>
+#include <string.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -41,6 +43,19 @@
 #define UART_TX_TIMEOUT_MS     100U
 #define UART_CONSOLE_BUFFER_SIZE 1024U
 #define UART_SAMPLE_DECIMATION 32U
+
+#if UINT32_MAX != 0xFFFFFFFFU
+#error "I2S DMA samples require a 32-bit uint32_t"
+#endif
+
+#define I2S_24BIT_MASK          0x00FFFFFFU
+#define I2S_24BIT_SIGN          0x00800000U
+#define I2S_24BIT_LEFT_SHIFT    8U
+#define I2S_MIC_SLOT            0U
+
+#if I2S_MIC_SLOT > 1U
+#error "I2S_MIC_SLOT must be 0 (left) or 1 (right)"
+#endif
 
 /* USER CODE END PD */
 
@@ -387,11 +402,13 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 static int32_t DecodeI2S24(uint32_t raw_sample)
 {
-  int32_t sample = (int32_t)(raw_sample & 0x00FFFFFFU);
+  /* With I2S_DATA_24BIT_ALIGNMENT_LEFT, the 24 useful bits are [31:8]. */
+  uint32_t sample24 = (raw_sample >> I2S_24BIT_LEFT_SHIFT) & I2S_24BIT_MASK;
+  int32_t sample = (int32_t)sample24;
 
-  if ((sample & 0x00800000L) != 0)
+  if ((sample24 & I2S_24BIT_SIGN) != 0U)
   {
-    sample |= (int32_t)0xFF000000L;
+    sample |= (int32_t)0xFF000000U;
   }
 
   return sample;
@@ -417,7 +434,13 @@ static void ProcessI2SBlock(const uint32_t *samples, uint32_t count,
   UINT bytes_written = 0U;
   uint32_t mono_count = 0U;
 
-  for (uint32_t index = 0U; index < count; index += 2U)
+  if ((samples == NULL) || (file == NULL) || (sample_index == NULL) ||
+      ((count & 1U) != 0U) || (count > I2S_DMA_HALF_SAMPLES))
+  {
+    Error_Handler();
+  }
+
+  for (uint32_t index = I2S_MIC_SLOT; index < count; index += 2U)
   {
     int32_t sample = DecodeI2S24(samples[index]);
     mono_audio[mono_count++] = sample;
