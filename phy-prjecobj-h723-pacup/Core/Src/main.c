@@ -51,9 +51,13 @@
 #define I2S_24BIT_MASK          0x00FFFFFFU
 #define I2S_24BIT_SIGN          0x00800000U
 #define I2S_24BIT_LEFT_SHIFT    8U
+#define I2S_24BIT_ALIGNMENT     1U
+#define I2S_24BIT_ALIGNMENT_RIGHT 0U
+#define I2S_24BIT_ALIGNMENT_LEFT  1U
 #define I2S_MIC_SLOT            0U
 #define I2S_BLOCK_SECONDS       1U
 #define I2S_BLOCK_SAMPLES       (I2S_SAMPLE_RATE * I2S_BLOCK_SECONDS)
+#define I2S_DIAGNOSTIC_INTERVAL 1000U
 
 #if I2S_MIC_SLOT > 1U
 #error "I2S_MIC_SLOT must be 0 (left) or 1 (right)"
@@ -408,8 +412,13 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 static int32_t DecodeI2S24(uint32_t raw_sample)
 {
+#if I2S_24BIT_ALIGNMENT == I2S_24BIT_ALIGNMENT_LEFT
   /* With I2S_DATA_24BIT_ALIGNMENT_LEFT, the 24 useful bits are [31:8]. */
   uint32_t sample24 = (raw_sample >> I2S_24BIT_LEFT_SHIFT) & I2S_24BIT_MASK;
+#else
+  /* With I2S_DATA_24BIT_ALIGNMENT_RIGHT, the 24 useful bits are [23:0]. */
+  uint32_t sample24 = raw_sample & I2S_24BIT_MASK;
+#endif
   int32_t sample = (int32_t)sample24;
 
   if ((sample24 & I2S_24BIT_SIGN) != 0U)
@@ -553,6 +562,9 @@ static void RecordI2S10Seconds(void)
   {
     uint32_t captured_count = 0U;
 
+    i2s_ready_mask = 0U;
+    i2s_dma_error = 0U;
+
     if (HAL_I2SEx_TransmitReceive_DMA(&hi2s1,
                                       (const uint16_t *)i2s_tx_silence,
                                       (uint16_t *)i2s_rx_buffer,
@@ -595,6 +607,40 @@ static void RecordI2S10Seconds(void)
     if (captured_count != block_samples)
     {
       Error_Handler();
+    }
+
+    {
+      uint32_t nonzero_count = 0U;
+      int32_t minimum = captured_audio[0];
+      int32_t maximum = captured_audio[0];
+      char diagnostic[96];
+
+      for (uint32_t index = 0U; index < block_samples; ++index)
+      {
+        int32_t sample = captured_audio[index];
+        if (sample != 0)
+        {
+          ++nonzero_count;
+        }
+        if (sample < minimum)
+        {
+          minimum = sample;
+        }
+        if (sample > maximum)
+        {
+          maximum = sample;
+        }
+      }
+
+      int diagnostic_length = snprintf(diagnostic, sizeof(diagnostic),
+                                       "[block %lu] nonzero=%lu min=%ld max=%ld\r\n",
+                                       (unsigned long)(block_start / I2S_BLOCK_SAMPLES),
+                                       (unsigned long)nonzero_count,
+                                       (long)minimum, (long)maximum);
+      if (diagnostic_length > 0)
+      {
+        TransmitUartText(diagnostic, (uint16_t)diagnostic_length);
+      }
     }
 
     WriteCapturedBlock(&SDFile, block_start, block_samples);
