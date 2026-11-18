@@ -52,6 +52,8 @@
 #define I2S_24BIT_SIGN          0x00800000U
 #define I2S_24BIT_LEFT_SHIFT    8U
 #define I2S_MIC_SLOT            0U
+#define I2S_BLOCK_SECONDS       1U
+#define I2S_BLOCK_SAMPLES       (I2S_SAMPLE_RATE * I2S_BLOCK_SECONDS)
 
 #if I2S_MIC_SLOT > 1U
 #error "I2S_MIC_SLOT must be 0 (left) or 1 (right)"
@@ -83,6 +85,8 @@ static uint32_t i2s_rx_buffer[I2S_DMA_SAMPLES];
 
 static volatile uint32_t i2s_ready_mask;
 static volatile uint32_t i2s_dma_error;
+__attribute__((aligned(32)))
+static int32_t captured_audio[I2S_BLOCK_SAMPLES];
 
 /* USER CODE END PV */
 
@@ -96,8 +100,10 @@ static void MX_LPUART1_UART_Init(void);
 static void MX_SDMMC1_SD_Init(void);
 /* USER CODE BEGIN PFP */
 static void RecordI2S10Seconds(void);
-static void ProcessI2SBlock(const uint32_t *samples, uint32_t count,
-                            FIL *file, uint32_t *sample_index);
+static void CaptureI2SBlock(const uint32_t *samples, uint32_t count,
+                            uint32_t *captured_count);
+static void WriteCapturedBlock(FIL *file, uint32_t first_sample,
+                               uint32_t sample_count);
 static int32_t DecodeI2S24(uint32_t raw_sample);
 static void TransmitUartText(const char *text, uint16_t length);
 
@@ -423,86 +429,83 @@ static void TransmitUartText(const char *text, uint16_t length)
   }
 }
 
-static void ProcessI2SBlock(const uint32_t *samples, uint32_t count,
-                            FIL *file, uint32_t *sample_index)
+static void CaptureI2SBlock(const uint32_t *samples, uint32_t count,
+                            uint32_t *captured_count)
 {
-  static char csv_buffer[20480];
-  static int32_t mono_audio[I2S_DMA_HALF_SAMPLES / 2U];
-  char text_buffer[UART_CONSOLE_BUFFER_SIZE];
-  UINT csv_length = 0U;
-  uint16_t text_length = 0U;
-  UINT bytes_written = 0U;
-  uint32_t mono_count = 0U;
-
-  if ((samples == NULL) || (file == NULL) || (sample_index == NULL) ||
-      ((count & 1U) != 0U) || (count > I2S_DMA_HALF_SAMPLES))
+  if ((samples == NULL) || (captured_count == NULL) ||
+      ((count & 1U) != 0U) || (count > I2S_DMA_HALF_SAMPLES) ||
+      (*captured_count >= I2S_BLOCK_SAMPLES))
   {
     Error_Handler();
   }
 
-  for (uint32_t index = I2S_MIC_SLOT; index < count; index += 2U)
+  for (uint32_t index = I2S_MIC_SLOT;
+       (index < count) && (*captured_count < I2S_BLOCK_SAMPLES);
+       index += 2U)
   {
-    int32_t sample = DecodeI2S24(samples[index]);
-    mono_audio[mono_count++] = sample;
+    captured_audio[(*captured_count)++] = DecodeI2S24(samples[index]);
+  }
+}
+
+static void WriteCapturedBlock(FIL *file, uint32_t first_sample,
+                               uint32_t sample_count)
+{
+  static char csv_buffer[20480];
+  UINT csv_length = 0U;
+  UINT bytes_written = 0U;
+
+  if ((file == NULL) || (sample_count > I2S_BLOCK_SAMPLES) ||
+      (sample_count == 0U) ||
+      (first_sample > (RECORDING_SAMPLES - sample_count)))
+  {
+    Error_Handler();
   }
 
-  for (uint32_t index = 0U; index < mono_count; ++index)
+  for (uint32_t index = 0U; index < sample_count; ++index)
   {
-    int32_t sample = mono_audio[index];
     int written = snprintf(&csv_buffer[csv_length],
                            sizeof(csv_buffer) - csv_length,
                            "%lu,%ld\r\n",
-                           (unsigned long)*sample_index, (long)sample);
-    if ((written < 0) || ((UINT)written >= (sizeof(csv_buffer) - csv_length)))
+                           (unsigned long)(first_sample + index),
+                           (long)captured_audio[index]);
+    if ((written < 0) ||
+        ((UINT)written >= (sizeof(csv_buffer) - csv_length)))
     {
-      Error_Handler();
-    }
-    csv_length += (UINT)written;
+      if (csv_length != 0U)
+      {
+        if ((f_write(file, csv_buffer, csv_length, &bytes_written) != FR_OK) ||
+            (bytes_written != csv_length))
+        {
+          Error_Handler();
+        }
+        csv_length = 0U;
+      }
 
-    /*
-     * Only transmit printable ASCII. Sending the raw I2S word here would
-     * make the UART terminal decode arbitrary bytes as replacement characters.
-     */
-    if (((*sample_index % UART_SAMPLE_DECIMATION) == 0U))
-    {
-      int text_written = snprintf(&text_buffer[text_length],
-                                  sizeof(text_buffer) - text_length,
-                                  "[%06lu] %ld\r\n",
-                                  (unsigned long)*sample_index,
-                                  (long)sample);
-      if ((text_written < 0) ||
-          ((uint16_t)text_written >= (sizeof(text_buffer) - text_length)))
+      written = snprintf(csv_buffer, sizeof(csv_buffer),
+                         "%lu,%ld\r\n",
+                         (unsigned long)(first_sample + index),
+                         (long)captured_audio[index]);
+      if ((written < 0) || ((UINT)written >= sizeof(csv_buffer)))
       {
         Error_Handler();
       }
-
-      text_length += (uint16_t)text_written;
-      if (text_length > (sizeof(text_buffer) - 32U))
-      {
-        TransmitUartText(text_buffer, text_length);
-        text_length = 0U;
-      }
     }
-
-    (*sample_index)++;
+    csv_length += (UINT)written;
   }
 
-  if (text_length != 0U)
+  if (csv_length != 0U)
   {
-    TransmitUartText(text_buffer, text_length);
-  }
-
-  if ((f_write(file, csv_buffer, csv_length, &bytes_written) != FR_OK) ||
-      (bytes_written != csv_length))
-  {
-    Error_Handler();
+    if ((f_write(file, csv_buffer, csv_length, &bytes_written) != FR_OK) ||
+        (bytes_written != csv_length))
+    {
+      Error_Handler();
+    }
   }
 }
 
 static void RecordI2S10Seconds(void)
 {
   char file_path[24];
-  uint32_t sample_index = 0U;
   FRESULT result;
 
   if (retSD != 0U)
@@ -543,47 +546,60 @@ static void RecordI2S10Seconds(void)
   memset(i2s_tx_silence, 0, sizeof(i2s_tx_silence));
   i2s_ready_mask = 0U;
   i2s_dma_error = 0U;
-  if (HAL_I2SEx_TransmitReceive_DMA(&hi2s1, (const uint16_t *)i2s_tx_silence,
-                                    (uint16_t *)i2s_rx_buffer,
-                                    I2S_DMA_SAMPLES) != HAL_OK)
-  {
-    Error_Handler();
-  }
 
-  while (sample_index < RECORDING_SAMPLES)
+  for (uint32_t block_start = 0U;
+       block_start < RECORDING_SAMPLES;
+       block_start += I2S_BLOCK_SAMPLES)
   {
-    uint32_t ready = i2s_ready_mask;
-    if (i2s_dma_error != 0U)
+    uint32_t captured_count = 0U;
+
+    if (HAL_I2SEx_TransmitReceive_DMA(&hi2s1,
+                                      (const uint16_t *)i2s_tx_silence,
+                                      (uint16_t *)i2s_rx_buffer,
+                                      I2S_DMA_SAMPLES) != HAL_OK)
     {
       Error_Handler();
     }
 
-    if ((ready & 1U) != 0U)
+    while (captured_count < I2S_BLOCK_SAMPLES)
     {
-      i2s_ready_mask &= ~1U;
-      uint32_t raw_sample_index = sample_index * 2U;
-      uint32_t count = RECORDING_RAW_SAMPLES - raw_sample_index;
-      if (count > I2S_DMA_HALF_SAMPLES)
+      uint32_t ready = i2s_ready_mask;
+
+      if (i2s_dma_error != 0U)
       {
-        count = I2S_DMA_HALF_SAMPLES;
+        Error_Handler();
       }
-      ProcessI2SBlock(i2s_rx_buffer, count, &SDFile, &sample_index);
+
+      if ((ready & 1U) != 0U)
+      {
+        i2s_ready_mask &= ~1U;
+        CaptureI2SBlock(i2s_rx_buffer, I2S_DMA_HALF_SAMPLES,
+                        &captured_count);
+      }
+      else if ((ready & 2U) != 0U)
+      {
+        i2s_ready_mask &= ~2U;
+        CaptureI2SBlock(&i2s_rx_buffer[I2S_DMA_HALF_SAMPLES],
+                        I2S_DMA_HALF_SAMPLES, &captured_count);
+      }
     }
-    else if ((ready & 2U) != 0U)
+
+    (void)HAL_I2S_DMAStop(&hi2s1);
+
+    uint32_t block_samples = I2S_BLOCK_SAMPLES;
+    if ((block_start + block_samples) > RECORDING_SAMPLES)
     {
-      i2s_ready_mask &= ~2U;
-      uint32_t raw_sample_index = sample_index * 2U;
-      uint32_t count = RECORDING_RAW_SAMPLES - raw_sample_index;
-      if (count > I2S_DMA_HALF_SAMPLES)
-      {
-        count = I2S_DMA_HALF_SAMPLES;
-      }
-      ProcessI2SBlock(&i2s_rx_buffer[I2S_DMA_HALF_SAMPLES], count,
-                      &SDFile, &sample_index);
+      block_samples = RECORDING_SAMPLES - block_start;
     }
+
+    if (captured_count != block_samples)
+    {
+      Error_Handler();
+    }
+
+    WriteCapturedBlock(&SDFile, block_start, block_samples);
   }
 
-  (void)HAL_I2S_DMAStop(&hi2s1);
   if (f_sync(&SDFile) != FR_OK)
   {
     Error_Handler();
