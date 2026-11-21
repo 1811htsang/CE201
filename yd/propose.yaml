@@ -1,0 +1,250 @@
+pject: "pdm-bearing-acoustic-testobj"
+versh: "v1.1.6"
+
+# =========================================================
+# ANCHOR - Global Data Area (GDA) - Bộ đệm D2MP (Zero-copy)
+# =========================================================
+glbda:
+  - &gda_status
+      name: GDA_BEARING_STATUS
+      type: "const char*"
+      initial_value: "STATUS: BEARING_NORMAL"
+  - &gda_anomaly_score
+      name: GDA_ANOMALY_SCORE
+      type: "int"           # Thang điểm 0 - 100 (đại diện xác suất lỗi)
+      initial_value: 5
+  - &gda_frame_counter
+      name: GDA_FRAME_COUNTER
+      type: "int"
+      initial_value: 0
+  - &gda_emergency_flag
+      name: GDA_EMERGENCY_TRIP
+      type: "bool"
+      initial_value: false
+
+# =========================================================
+# ANCHOR - Task List (TLIST)
+# =========================================================
+tlist:
+  # -------------------------------------------------------
+  # 1. TASK_NORM_USR: Điều phối toàn hệ thống (TSM)
+  # -------------------------------------------------------
+  - tnorm: TASK_NORM_USR
+    tsm:
+      - id: tsm_task_usr_state_idle
+        trans:
+          - sig: *sig1-ank  # SIG_USR_START
+            goto: tsm_task_usr_state_running
+          - sig: *sig2-ank  # SIG_USR_STOP
+            goto: UEDP_TSM_STATE_STAY
+        on_ntry:
+          steps:
+            - actv: 
+                kind: c_call
+                function: printf
+                args: ['"[USR][IDLE][NTRY] PdM System Initialized. Ready for monitoring.\n"']
+        on_actv:
+          steps:
+            - actv: 
+                kind: c_stmt
+                code: |
+                  if (msg->sig == SIG_USR_START) {
+                    printf("[USR][IDLE][ACTV] Received START command. Starting Audio Sampling.\n");
+                    // Kích hoạt tác vụ thu thập âm thanh
+                    uedp_msg_t* m = uedp_msg_alloc(TASK_NORM_AUDIO_ACQ, SIG_START_ACQ, sizeof(void*));
+                    if (m) uedp_task_norm_post_msg(TASK_NORM_AUDIO_ACQ, m);
+                  }
+        on_exit:
+          actv: 
+            kind: c_call
+            function: printf
+            args: ['"[USR][IDLE][EXIT] Transitioning to RUNNING mode.\n"']
+
+      - id: tsm_task_usr_state_running
+        trans:
+          - sig: *sig2-ank  # SIG_USR_STOP
+            goto: tsm_task_usr_state_idle
+        on_ntry:
+          actv: 
+            kind: c_call
+            function: printf
+            args: ['"[USR][RUNNING][NTRY] Continuous Acoustic Monitoring Active.\n"']
+        on_actv:
+          steps:
+            - actv: 
+                kind: c_stmt
+                code: |
+                  if (msg->sig == SIG_USR_STOP) {
+                    printf("[USR][RUNNING][ACTV] Stop signal received. System shutting down.\n");
+                  }
+        on_exit:
+          steps:
+            - actv: 
+                kind: c_call
+                function: printf
+                args: ['"[USR][RUNNING][EXIT] PdM Session Closed.\n"']
+    <<: *tnorm1-ank
+
+  # -------------------------------------------------------
+  # 2. TASK_NORM_AUDIO_ACQ: Thu thập & Chuẩn hóa I2S (FSM)
+  # -------------------------------------------------------
+  - tnorm: TASK_NORM_AUDIO_ACQ
+    fsm:
+      - id: fsm_acq_state_idle
+        on_recv:
+          - sig: *sig1-ank  # Nhận lệnh kích hoạt
+            goto: fsm_acq_state_sampling
+            steps:
+              - actv: 
+                  kind: c_call
+                  function: printf
+                  args: ['"[ACQ][IDLE] Starting DMA Ping-Pong Buffer.\n"']
+      - id: fsm_acq_state_sampling
+        on_recv:
+          # Nhận thông báo Half-Buffer từ ngắt DMA (SII)
+          - sig: *sig3-ank  # SIG_AUDIO_DMA_HALF / FULL
+            goto: fsm_acq_state_sampling
+            steps:
+              - actv: 
+                  kind: c_stmt
+                  code: |
+                    // 1. Chuyển đổi mẫu thô 24-bit I2S -> 16-bit Mono Frame
+                    GDA_FRAME_COUNTER++;
+                    printf("[ACQ][SAMPLING] Ingested Audio Buffer. Frame Count: %d.\n", GDA_FRAME_COUNTER);
+                    
+                    // 2. Góp đủ 1024 mẫu -> gửi tín hiệu cho Task DSP tính MFCC
+                    uedp_msg_t* m = uedp_msg_alloc(TASK_NORM_DSP_MFCC, SIG_FRAME_READY, sizeof(void*));
+                    if (m) uedp_task_norm_post_msg(TASK_NORM_DSP_MFCC, m);
+    <<: *tnorm2-ank
+
+  # -------------------------------------------------------
+  # 3. TASK_NORM_DSP_MFCC: Trích xuất đặc trưng âm thanh (Exec)
+  # Chỗ này sẽ bổ sung thêm các bước xử lý thực tế của libmfcc hoặc CMSIS-DSP để tính toán MFCC từ dữ liệu âm thanh thu được.
+  # -------------------------------------------------------
+  - tnorm: TASK_NORM_DSP_MFCC
+    exec:
+      - on_sig: *sig4-ank  # SIG_FRAME_READY
+        steps:
+          - actv: 
+              kind: c_stmt
+              code: |
+                // Gọi thư viện CMSIS-DSP tính toán: Hanning Window -> RFFT -> Mel Filterbank -> DCT
+                printf("[DSP][MFCC] Processing 1024-point FFT & Extracting 20 MFCC features.\n");
+                
+                // Gửi thông báo cho Task AI suy luận
+                uedp_msg_t* m = uedp_msg_alloc(TASK_NORM_AI_INFER, SIG_FEATURES_READY, sizeof(void*));
+                if (m) uedp_task_norm_post_msg(TASK_NORM_AI_INFER, m);
+    <<: *tnorm3-ank
+
+  # -------------------------------------------------------
+  # 4. TASK_NORM_AI_INFER: Suy luận Anomaly Score qua TFLite (Exec)
+  # Hiện tại model chưa được tích hợp, chỉ là tạm thời để minh họa trước khi implement thực tế
+  # -------------------------------------------------------
+  - tnorm: TASK_NORM_AI_INFER
+    exec:
+      - on_sig: *sig5-ank  # SIG_FEATURES_READY
+        steps:
+          - actv: 
+              kind: c_stmt
+              code: |
+                printf("[AI][INFER] Invoking TFLite Micro Interpreter on Tensor Arena...\n");
+                
+                // Giả lập điểm số bất thường từ mô hình (ví dụ 85% - có dấu hiệu mòn ổ bi)
+                GDA_ANOMALY_SCORE = 85; 
+                printf("[AI][INFER] Inference Complete. Anomaly Score: %d%%.\n", GDA_ANOMALY_SCORE);
+                
+                // Báo cáo kết quả về Task Giám sát
+                uedp_msg_t* m = uedp_msg_alloc(TASK_NORM_SUPERVISOR, SIG_DIAG_RESULT, sizeof(int));
+                if (m) {
+                  uedp_msg_set_data_val(m, &GDA_ANOMALY_SCORE, sizeof(int));
+                  uedp_task_norm_post_msg(TASK_NORM_SUPERVISOR, m);
+                }
+    <<: *tnorm4-ank
+
+  # -------------------------------------------------------
+  # 5. TASK_NORM_SUPERVISOR: Đánh giá & Phản ứng khẩn cấp (TSM + APE)
+  # -------------------------------------------------------
+  - tnorm: TASK_NORM_SUPERVISOR
+    tsm:
+      - id: tsm_diag_state_healthy
+        trans:
+          - sig: *sig6-ank  # SIG_DIAG_RESULT
+            goto: tsm_diag_state_fault
+        on_ntry:
+          steps:
+            - actv: 
+                kind: c_stmt
+                code: |
+                  GDA_BEARING_STATUS = "STATUS: BEARING_NORMAL";
+                  printf("[SUPERVISOR][HEALTHY] Machine operating normally.\n");
+        on_actv:
+          steps:
+            - actv: 
+                kind: c_stmt
+                code: |
+                  // Đọc kết quả từ AI, nếu vượt ngưỡng 80% chuyển trạng thái nguy hiểm
+                  int score = *(int*)(msg->data);
+                  if (score > 80) {
+                    printf("[SUPERVISOR][HEALTHY] High Anomaly Detected (%d%%)! Transitioning to FAULT.\n", score);
+                  }
+        on_exit:
+          actv: 
+            kind: c_call
+            function: printf
+            args: ['"[SUPERVISOR][HEALTHY][EXIT] Health status changed.\n"']
+
+      - id: tsm_diag_state_fault
+        trans:
+          - sig: *sig2-ank  # SIG_USR_STOP
+            goto: tsm_diag_state_healthy
+        on_ntry:
+          steps:
+            - actv: 
+                kind: c_stmt
+                code: |
+                  GDA_BEARING_STATUS = "STATUS: CRITICAL_OUTER_RACE_FAULT";
+                  GDA_EMERGENCY_TRIP = true;
+                  printf("[SUPERVISOR][FAULT][NTRY] >>> CRITICAL BEARING DEFECT DETECTED! <<<\n");
+                  
+                  // KÍCH HOẠT APE: Tự tăng ưu tiên để ngắt máy khẩn cấp ngay lập tức!
+                  uedp_task_norm_post_urgent(TASK_NORM_SUPERVISOR, SIG_EMERGENCY_TRIP);
+                  
+                  // ĐĂNG KÝ OCE: Lưu trữ âm thanh sự cố xuống thẻ SD khi CPU rảnh rỗi
+                  extern ocesvc_t svc_sd_incident_dump;
+                  uedp_ocesvc_register(&svc_sd_incident_dump);
+        on_actv:
+          steps:
+            - actv: 
+                kind: c_stmt
+                code: |
+                  if (msg->sig == SIG_EMERGENCY_TRIP) {
+                    printf("[SUPERVISOR][FAULT][ACTV] >>> HARDWARE EMERGENCY RELAY TRIPPED! MACHINE STOPPED. <<<\n");
+                  }
+        on_exit:
+          actv: 
+            kind: c_call
+            function: printf
+            args: ['"[SUPERVISOR][FAULT][EXIT] Fault cleared.\n"']
+    escal:
+      mode: slnf
+      trigger:
+        - on_sig: *sig7-ank  # SIG_EMERGENCY_TRIP
+          post_urgent: NULL
+    <<: *tnorm5-ank
+
+  # -------------------------------------------------------
+  # POLLING TASKS: Đèn trạng thái & Heartbeat
+  # -------------------------------------------------------
+  - tpoll: TASK_POLL_BLINK
+    exec: NULL
+    <<: *tpoll1-ank
+
+# =========================================================
+# ANCHOR - Out-Context Execution (OUTEXEC)
+# =========================================================
+outexec:
+  # Dịch vụ ghi nhị phân dữ liệu sự cố xuống thẻ SD khi hệ thống rảnh
+  - name: OCE_SD_INCIDENT_DUMP
+    handler: oce_sd_incident_dump_handler
+    context: "&GDA_ANOMALY_SCORE"
+    state: READY
