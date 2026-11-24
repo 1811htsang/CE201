@@ -36,32 +36,12 @@
 #define I2S_SAMPLE_RATE        32000U
 #define RECORDING_SECONDS      10U
 #define RECORDING_SAMPLES      (I2S_SAMPLE_RATE * RECORDING_SECONDS)
-#define RECORDING_RAW_SAMPLES  (RECORDING_SAMPLES * 2U)
 #define I2S_DMA_SAMPLES        2048U
 #define I2S_DMA_HALF_SAMPLES   (I2S_DMA_SAMPLES / 2U)
+#define RING_BUF_SAMPLES       16384U  /* Phai la luy thua cua 2 (chua 512ms audio) */
+#define WARMUP_HALF_BLOCKS     20U      /* Ghi ngay tu dau; khong bo sot tin hieu thu am */
 #define UART_TX_TIMEOUT_MS     100U
-#define UART_CONSOLE_BUFFER_SIZE 1024U
-#define UART_SAMPLE_DECIMATION 32U
-
-#if UINT32_MAX != 0xFFFFFFFFU
-#error "I2S DMA samples require a 32-bit uint32_t"
-#endif
-
-#define I2S_24BIT_MASK          0x00FFFFFFU
-#define I2S_24BIT_SIGN          0x00800000U
-#define I2S_24BIT_LEFT_SHIFT    8U
-#define I2S_24BIT_ALIGNMENT     1U
-#define I2S_24BIT_ALIGNMENT_RIGHT 0U
-#define I2S_24BIT_ALIGNMENT_LEFT  1U
-#define I2S_MIC_SLOT            0U
-#define I2S_BLOCK_SECONDS       1U
-#define I2S_BLOCK_SAMPLES       (I2S_SAMPLE_RATE * I2S_BLOCK_SECONDS)
-#define I2S_DIAGNOSTIC_INTERVAL 1000U
-
-#if I2S_MIC_SLOT > 1U
-#error "I2S_MIC_SLOT must be 0 (left) or 1 (right)"
-#endif
-
+#define GENERATE_CSV_FILE      1U      /* Dat 0 neu chi can .bin va .wav cho nhanh */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -72,7 +52,6 @@
 /* Private variables ---------------------------------------------------------*/
 
 I2S_HandleTypeDef hi2s1;
-DMA_HandleTypeDef hdma_spi1_tx;
 DMA_HandleTypeDef hdma_spi1_rx;
 
 UART_HandleTypeDef hlpuart1;
@@ -82,15 +61,16 @@ SD_HandleTypeDef hsd1;
 /* USER CODE BEGIN PV */
 /* DMA1 can access D2 SRAM; the linker places this section at 0x30000000. */
 __attribute__((section(".dma_buffer"), aligned(32)))
-static uint32_t i2s_tx_silence[I2S_DMA_SAMPLES];
-__attribute__((section(".dma_buffer"), aligned(32)))
 static uint32_t i2s_rx_buffer[I2S_DMA_SAMPLES];
 
-static volatile uint32_t i2s_ready_mask;
-static volatile uint32_t i2s_dma_error;
-__attribute__((aligned(32)))
-static int32_t captured_audio[I2S_BLOCK_SAMPLES];
-
+static int32_t ring_buf[RING_BUF_SAMPLES];
+static volatile uint32_t ring_head = 0U;
+static volatile uint32_t ring_tail = 0U;
+static volatile uint32_t warmup_left = 0U;
+static volatile uint32_t samples_captured = 0U;
+static volatile uint32_t i2s_dma_error = 0U;
+static volatile uint32_t ring_overflow = 0U;
+static volatile int32_t capture_peak = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -103,30 +83,70 @@ static void MX_LPUART1_UART_Init(void);
 static void MX_SDMMC1_SD_Init(void);
 /* USER CODE BEGIN PFP */
 static void RecordI2S10Seconds(void);
-static void CaptureI2SBlock(const uint32_t *samples, uint32_t count,
-                            uint32_t *captured_count);
-static void WriteCapturedBlock(FIL *file, uint32_t first_sample,
-                               uint32_t sample_count);
 static int32_t DecodeI2S24(uint32_t raw_sample);
+static void PushI2SHalfToRing(const uint32_t *half_samples);
+static void CreateWavAndCsvFromBin(const char *bin_path,
+                                   const char *wav_path,
+                                   const char *csv_path);
 static void TransmitUartText(const char *text, uint16_t length);
-
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void HAL_I2SEx_TxRxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
+static int32_t DecodeI2S24(uint32_t raw_sample)
 {
-  if (hi2s == &hi2s1)
+  /* Data24BitAlignment = LEFT -> 24-bit nam o [31:8], dich phai giu dau */
+  return (int32_t)raw_sample >> 8;
+}
+
+static void PushI2SHalfToRing(const uint32_t *half_samples)
+{
+  if (warmup_left > 0U)
   {
-    i2s_ready_mask |= 1U;
+    warmup_left--;
+    return;
+  }
+
+  for (uint32_t i = 0U; i < I2S_DMA_HALF_SAMPLES; i += 2U)
+  {
+    if (samples_captured >= RECORDING_SAMPLES)
+    {
+      break;
+    }
+
+    uint32_t next_head = (ring_head + 1U) & (RING_BUF_SAMPLES - 1U);
+    if (next_head == ring_tail)
+    {
+      ring_overflow = 1U;
+      break;
+    }
+
+    int32_t sample = DecodeI2S24(half_samples[i]);
+    ring_buf[ring_head] = sample; /* Kenh L (index chan) */
+    int32_t magnitude = (sample < 0) ? -(sample + 1) + 1 : sample;
+    if (magnitude > capture_peak)
+    {
+      capture_peak = magnitude;
+    }
+    __DMB();
+    ring_head = next_head;
+    samples_captured++;
   }
 }
 
-void HAL_I2SEx_TxRxCpltCallback(I2S_HandleTypeDef *hi2s)
+void HAL_I2S_RxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 {
   if (hi2s == &hi2s1)
   {
-    i2s_ready_mask |= 2U;
+    PushI2SHalfToRing(&i2s_rx_buffer[0]);
+  }
+}
+
+void HAL_I2S_RxCpltCallback(I2S_HandleTypeDef *hi2s)
+{
+  if (hi2s == &hi2s1)
+  {
+    PushI2SHalfToRing(&i2s_rx_buffer[I2S_DMA_HALF_SAMPLES]);
   }
 }
 
@@ -134,10 +154,11 @@ void HAL_I2S_ErrorCallback(I2S_HandleTypeDef *hi2s)
 {
   if (hi2s == &hi2s1)
   {
+    __IO uint32_t tmpreg = hi2s->Instance->SR;
+    (void)tmpreg;
     i2s_dma_error = 1U;
   }
 }
-
 /* USER CODE END 0 */
 
 /**
@@ -221,13 +242,13 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL.PLLM = 4;
-  RCC_OscInitStruct.PLL.PLLN = 30;
+  RCC_OscInitStruct.PLL.PLLN = 13;
   RCC_OscInitStruct.PLL.PLLP = 1;
-  RCC_OscInitStruct.PLL.PLLQ = 3;
+  RCC_OscInitStruct.PLL.PLLQ = 2;
   RCC_OscInitStruct.PLL.PLLR = 2;
   RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_3;
   RCC_OscInitStruct.PLL.PLLVCOSEL = RCC_PLL1VCOWIDE;
-  RCC_OscInitStruct.PLL.PLLFRACN = 3072;
+  RCC_OscInitStruct.PLL.PLLFRACN = 2560;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -240,7 +261,7 @@ void SystemClock_Config(void)
                               |RCC_CLOCKTYPE_D3PCLK1|RCC_CLOCKTYPE_D1PCLK1;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB3CLKDivider = RCC_APB3_DIV2;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV2;
@@ -268,7 +289,7 @@ static void MX_I2S1_Init(void)
 
   /* USER CODE END I2S1_Init 1 */
   hi2s1.Instance = SPI1;
-  hi2s1.Init.Mode = I2S_MODE_MASTER_FULLDUPLEX;
+  hi2s1.Init.Mode = I2S_MODE_MASTER_RX;
   hi2s1.Init.Standard = I2S_STANDARD_PHILIPS;
   hi2s1.Init.DataFormat = I2S_DATAFORMAT_24B;
   hi2s1.Init.MCLKOutput = I2S_MCLKOUTPUT_ENABLE;
@@ -304,7 +325,7 @@ static void MX_LPUART1_UART_Init(void)
 
   /* USER CODE END LPUART1_Init 1 */
   hlpuart1.Instance = LPUART1;
-  hlpuart1.Init.BaudRate = 209700;
+  hlpuart1.Init.BaudRate = 921600;
   hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
   hlpuart1.Init.StopBits = UART_STOPBITS_1;
   hlpuart1.Init.Parity = UART_PARITY_NONE;
@@ -377,9 +398,6 @@ static void MX_DMA_Init(void)
   __HAL_RCC_DMA1_CLK_ENABLE();
 
   /* DMA interrupt init */
-  /* DMA1_Stream0_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
   /* DMA1_Stream1_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream1_IRQn);
@@ -409,259 +427,214 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-static int32_t DecodeI2S24(uint32_t raw_sample)
-{
-#if I2S_24BIT_ALIGNMENT == I2S_24BIT_ALIGNMENT_LEFT
-  /* With I2S_DATA_24BIT_ALIGNMENT_LEFT, the 24 useful bits are [31:8]. */
-  uint32_t sample24 = (raw_sample >> I2S_24BIT_LEFT_SHIFT) & I2S_24BIT_MASK;
-#else
-  /* With I2S_DATA_24BIT_ALIGNMENT_RIGHT, the 24 useful bits are [23:0]. */
-  uint32_t sample24 = raw_sample & I2S_24BIT_MASK;
-#endif
-  int32_t sample = (int32_t)sample24;
-
-  if ((sample24 & I2S_24BIT_SIGN) != 0U)
-  {
-    sample |= (int32_t)0xFF000000U;
-  }
-
-  return sample;
-}
-
 static void TransmitUartText(const char *text, uint16_t length)
 {
-  if (HAL_UART_Transmit(&hlpuart1, (const uint8_t *)text, length,
-                        UART_TX_TIMEOUT_MS) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  (void)HAL_UART_Transmit(&hlpuart1, (const uint8_t *)text, length, UART_TX_TIMEOUT_MS);
 }
 
-static void CaptureI2SBlock(const uint32_t *samples, uint32_t count,
-                            uint32_t *captured_count)
+static void WriteLittleEndian32(uint8_t *dst, uint32_t val)
 {
-  if ((samples == NULL) || (captured_count == NULL) ||
-      ((count & 1U) != 0U) || (count > I2S_DMA_HALF_SAMPLES) ||
-      (*captured_count >= I2S_BLOCK_SAMPLES))
-  {
-    Error_Handler();
-  }
-
-  for (uint32_t index = I2S_MIC_SLOT;
-       (index < count) && (*captured_count < I2S_BLOCK_SAMPLES);
-       index += 2U)
-  {
-    captured_audio[(*captured_count)++] = DecodeI2S24(samples[index]);
-  }
+  dst[0] = (uint8_t)(val & 0xFFU);
+  dst[1] = (uint8_t)((val >> 8) & 0xFFU);
+  dst[2] = (uint8_t)((val >> 16) & 0xFFU);
+  dst[3] = (uint8_t)((val >> 24) & 0xFFU);
 }
 
-static void WriteCapturedBlock(FIL *file, uint32_t first_sample,
-                               uint32_t sample_count)
+static void WriteLittleEndian16(uint8_t *dst, uint16_t val)
 {
-  static char csv_buffer[20480];
-  UINT csv_length = 0U;
-  UINT bytes_written = 0U;
+  dst[0] = (uint8_t)(val & 0xFFU);
+  dst[1] = (uint8_t)((val >> 8) & 0xFFU);
+}
 
-  if ((file == NULL) || (sample_count > I2S_BLOCK_SAMPLES) ||
-      (sample_count == 0U) ||
-      (first_sample > (RECORDING_SAMPLES - sample_count)))
-  {
-    Error_Handler();
-  }
+static void CreateWavAndCsvFromBin(const char *bin_path,
+                                   const char *wav_path,
+                                   const char *csv_path)
+{
+  static FIL bin_file;
+  static FIL out_file;
+  __attribute__((section(".dma_buffer"), aligned(32))) static int32_t in_chunk[512];
+  __attribute__((section(".dma_buffer"), aligned(32))) static int16_t wav_chunk[512];
+  __attribute__((section(".dma_buffer"), aligned(32))) static char csv_chunk[4096];
+  uint8_t wav_hdr[44];
+  UINT br = 0U, bw = 0U;
+  uint32_t data_bytes_16 = RECORDING_SAMPLES * 2U;
 
-  for (uint32_t index = 0U; index < sample_count; ++index)
+  /* 1. Tao file WAV 16-bit PCM (32kHz, Mono) de nghe truc tiep tren PC */
+  memcpy(&wav_hdr[0],  "RIFF", 4);
+  WriteLittleEndian32(&wav_hdr[4],  36U + data_bytes_16);
+  memcpy(&wav_hdr[8],  "WAVE", 4);
+  memcpy(&wav_hdr[12], "fmt ", 4);
+  WriteLittleEndian32(&wav_hdr[16], 16U);              /* PCM */
+  WriteLittleEndian16(&wav_hdr[20], 1U);               /* Format = 1 */
+  WriteLittleEndian16(&wav_hdr[22], 1U);               /* 1 Kenh (Mono) */
+  WriteLittleEndian32(&wav_hdr[24], I2S_SAMPLE_RATE);  /* 32000 Hz */
+  WriteLittleEndian32(&wav_hdr[28], I2S_SAMPLE_RATE * 2U);
+  WriteLittleEndian16(&wav_hdr[32], 2U);               /* BlockAlign */
+  WriteLittleEndian16(&wav_hdr[34], 16U);              /* 16 bits/sample */
+  memcpy(&wav_hdr[36], "data", 4);
+  WriteLittleEndian32(&wav_hdr[40], data_bytes_16);
+
+  if (f_open(&bin_file, bin_path, FA_READ) != FR_OK) Error_Handler();
+  if (f_open(&out_file, wav_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) Error_Handler();
+  if ((f_write(&out_file, wav_hdr, 44U, &bw) != FR_OK) || (bw != 44U)) Error_Handler();
+
+  while (1)
   {
-    int written = snprintf(&csv_buffer[csv_length],
-                           sizeof(csv_buffer) - csv_length,
-                           "%lu,%ld\r\n",
-                           (unsigned long)(first_sample + index),
-                           (long)captured_audio[index]);
-    if ((written < 0) ||
-        ((UINT)written >= (sizeof(csv_buffer) - csv_length)))
+    if (f_read(&bin_file, in_chunk, sizeof(in_chunk), &br) != FR_OK) Error_Handler();
+    if (br == 0U) break;
+    uint32_t n = br / sizeof(int32_t);
+    for (uint32_t i = 0U; i < n; ++i)
     {
-      if (csv_length != 0U)
-      {
-        if ((f_write(file, csv_buffer, csv_length, &bytes_written) != FR_OK) ||
-            (bytes_written != csv_length))
-        {
-          Error_Handler();
-        }
-        csv_length = 0U;
-      }
-
-      written = snprintf(csv_buffer, sizeof(csv_buffer),
-                         "%lu,%ld\r\n",
-                         (unsigned long)(first_sample + index),
-                         (long)captured_audio[index]);
-      if ((written < 0) || ((UINT)written >= sizeof(csv_buffer)))
-      {
-        Error_Handler();
-      }
+      /* Chuyen 24-bit co dau sang 16-bit WAV (dich bo 8 bit thap) */
+      wav_chunk[i] = (int16_t)(in_chunk[i] >> 8);
     }
-    csv_length += (UINT)written;
-  }
-
-  if (csv_length != 0U)
-  {
-    if ((f_write(file, csv_buffer, csv_length, &bytes_written) != FR_OK) ||
-        (bytes_written != csv_length))
+    if ((f_write(&out_file, wav_chunk, n * sizeof(int16_t), &bw) != FR_OK) ||
+        (bw != n * sizeof(int16_t)))
     {
       Error_Handler();
     }
   }
+  f_close(&out_file);
+  f_close(&bin_file);
+
+#if GENERATE_CSV_FILE
+  /* 2. Xuat file CSV muot ma tu file BIN (khong anh huong DMA) */
+  if (f_open(&bin_file, bin_path, FA_READ) != FR_OK) Error_Handler();
+  if (f_open(&out_file, csv_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) Error_Handler();
+
+  static const char csv_hdr[] = "sample_index,sample_24bit\r\n";
+  if ((f_write(&out_file, csv_hdr, sizeof(csv_hdr) - 1U, &bw) != FR_OK) ||
+      (bw != sizeof(csv_hdr) - 1U))
+  {
+    Error_Handler();
+  }
+
+  uint32_t idx = 0U;
+  while (1)
+  {
+    if (f_read(&bin_file, in_chunk, sizeof(in_chunk), &br) != FR_OK) Error_Handler();
+    if (br == 0U) break;
+    uint32_t n = br / sizeof(int32_t);
+    UINT csv_len = 0U;
+    for (uint32_t i = 0U; i < n; ++i)
+    {
+      int w = snprintf(&csv_chunk[csv_len], sizeof(csv_chunk) - csv_len,
+                       "%lu,%ld\r\n", (unsigned long)idx++, (long)in_chunk[i]);
+      if ((w < 0) || ((UINT)w >= (sizeof(csv_chunk) - csv_len))) Error_Handler();
+      csv_len += (UINT)w;
+      if (csv_len > (sizeof(csv_chunk) - 64U))
+      {
+        if ((f_write(&out_file, csv_chunk, csv_len, &bw) != FR_OK) || (bw != csv_len))
+          Error_Handler();
+        csv_len = 0U;
+      }
+    }
+    if (csv_len > 0U)
+    {
+      if ((f_write(&out_file, csv_chunk, csv_len, &bw) != FR_OK) || (bw != csv_len))
+        Error_Handler();
+    }
+  }
+  f_close(&out_file);
+  f_close(&bin_file);
+#else
+  (void)csv_path;
+#endif
 }
 
 static void RecordI2S10Seconds(void)
 {
-  char file_path[24];
-  FRESULT result;
+  __attribute__((section(".dma_buffer"), aligned(32))) static int32_t sd_write_chunk[1024]; /* 4KB nam trong D2 SRAM, chuan DMA */
+  char bin_path[32], wav_path[32], csv_path[32];
+  uint32_t samples_written = 0U;
+  UINT bw = 0U;
 
-  if (retSD != 0U)
-  {
-    Error_Handler();
-  }
+  if (retSD != 0U) Error_Handler();
+  if (f_mount(&SDFatFS, (TCHAR const *)SDPath, 1U) != FR_OK) Error_Handler();
 
-  result = f_mount(&SDFatFS, (TCHAR const *)SDPath, 1U);
-  if (result != FR_OK)
-  {
-    Error_Handler();
-  }
+  (void)snprintf(bin_path, sizeof(bin_path), "%si2s_32k_10s.bin", SDPath);
+  (void)snprintf(wav_path, sizeof(wav_path), "%si2s_32k_10s.wav", SDPath);
+  (void)snprintf(csv_path, sizeof(csv_path), "%si2s_32k_10s.csv", SDPath);
 
-  (void)snprintf(file_path, sizeof(file_path), "%si2s_32k_10s.csv", SDPath);
-  result = f_open(&SDFile, file_path, FA_CREATE_ALWAYS | FA_WRITE);
-  if (result != FR_OK)
-  {
-    Error_Handler();
-  }
+  if (f_open(&SDFile, bin_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) Error_Handler();
 
-  {
-    static const char header[] = "sample_index,sample_24bit\r\n";
-    UINT bytes_written = 0U;
-    if ((f_write(&SDFile, header, sizeof(header) - 1U, &bytes_written) != FR_OK) ||
-        (bytes_written != sizeof(header) - 1U))
-    {
-      Error_Handler();
-    }
-  }
+  const char msg_start[] = "\r\n=== Recording 10s (32kHz) to BIN ===\r\n";
+  TransmitUartText(msg_start, (uint16_t)(sizeof(msg_start) - 1U));
 
-  {
-    static const char console_header[] =
-        "\r\n=== INMP441 I2S capture ===\r\n"
-        "index    signed decimal\r\n";
-    TransmitUartText(console_header, (uint16_t)(sizeof(console_header) - 1U));
-  }
-
-  memset(i2s_tx_silence, 0, sizeof(i2s_tx_silence));
-  i2s_ready_mask = 0U;
+//  memset(i2s_tx_silence, 0, sizeof(i2s_tx_silence));
+  ring_head = 0U;
+  ring_tail = 0U;
+  samples_captured = 0U;
+  warmup_left = WARMUP_HALF_BLOCKS;
   i2s_dma_error = 0U;
+  ring_overflow = 0U;
+  capture_peak = 0;
 
-  for (uint32_t block_start = 0U;
-       block_start < RECORDING_SAMPLES;
-       block_start += I2S_BLOCK_SAMPLES)
-  {
-    uint32_t captured_count = 0U;
-
-    i2s_ready_mask = 0U;
-    i2s_dma_error = 0U;
-
-    if (HAL_I2SEx_TransmitReceive_DMA(&hi2s1,
-                                      (const uint16_t *)i2s_tx_silence,
-                                      (uint16_t *)i2s_rx_buffer,
-                                      I2S_DMA_SAMPLES) != HAL_OK)
+  /* SUA LOI QUAN TRONG: Truyen dung I2S_DMA_SAMPLES (KHONG nhan * 2U!) */
+  if (HAL_I2S_Receive_DMA(&hi2s1,
+                            (uint16_t *)i2s_rx_buffer,
+							(uint16_t)(I2S_DMA_SAMPLES)) != HAL_OK)
     {
       Error_Handler();
     }
 
-    while (captured_count < I2S_BLOCK_SAMPLES)
-    {
-      uint32_t ready = i2s_ready_mask;
-
-      if (i2s_dma_error != 0U)
-      {
-        Error_Handler();
-      }
-
-      if ((ready & 1U) != 0U)
-      {
-        i2s_ready_mask &= ~1U;
-        CaptureI2SBlock(i2s_rx_buffer, I2S_DMA_HALF_SAMPLES,
-                        &captured_count);
-      }
-      else if ((ready & 2U) != 0U)
-      {
-        i2s_ready_mask &= ~2U;
-        CaptureI2SBlock(&i2s_rx_buffer[I2S_DMA_HALF_SAMPLES],
-                        I2S_DMA_HALF_SAMPLES, &captured_count);
-      }
-    }
-
-    (void)HAL_I2S_DMAStop(&hi2s1);
-
-    uint32_t block_samples = I2S_BLOCK_SAMPLES;
-    if ((block_start + block_samples) > RECORDING_SAMPLES)
-    {
-      block_samples = RECORDING_SAMPLES - block_start;
-    }
-
-    if (captured_count != block_samples)
+  while (samples_written < RECORDING_SAMPLES)
+  {
+    if ((i2s_dma_error != 0U) || (ring_overflow != 0U))
     {
       Error_Handler();
     }
 
-    {
-      uint32_t nonzero_count = 0U;
-      int32_t minimum = captured_audio[0];
-      int32_t maximum = captured_audio[0];
-      char diagnostic[96];
+    uint32_t head = ring_head;
+    uint32_t avail = (head - ring_tail) & (RING_BUF_SAMPLES - 1U);
 
-      for (uint32_t index = 0U; index < block_samples; ++index)
-      {
-        int32_t sample = captured_audio[index];
-        if (sample != 0)
-        {
-          ++nonzero_count;
-        }
-        if (sample < minimum)
-        {
-          minimum = sample;
-        }
-        if (sample > maximum)
-        {
-          maximum = sample;
-        }
-      }
 
-      int diagnostic_length = snprintf(diagnostic, sizeof(diagnostic),
-                                       "[block %lu] nonzero=%lu min=%ld max=%ld\r\n",
-                                       (unsigned long)(block_start / I2S_BLOCK_SAMPLES),
-                                       (unsigned long)nonzero_count,
-                                       (long)minimum, (long)maximum);
-      if (diagnostic_length > 0)
-      {
-        TransmitUartText(diagnostic, (uint16_t)diagnostic_length);
-      }
-    }
+    /* Ghi theo tung cuc lon 1024 mau (4KB) hoac ghi not phan cuoi */
+    if ((avail >= 1024U) || ((samples_captured >= RECORDING_SAMPLES) && (avail > 0U)))
+	{
+	  uint32_t n = (avail > 1024U) ? 1024U : avail;
+	  for (uint32_t i = 0U; i < n; ++i)
+	  {
+		sd_write_chunk[i] = ring_buf[ring_tail];
+		ring_tail = (ring_tail + 1U) & (RING_BUF_SAMPLES - 1U);
+	  }
 
-    WriteCapturedBlock(&SDFile, block_start, block_samples);
-  }
-
-  if (f_sync(&SDFile) != FR_OK)
-  {
-    Error_Handler();
-  }
-  if (f_close(&SDFile) != FR_OK)
-  {
-    Error_Handler();
-  }
-  (void)f_mount(NULL, (TCHAR const *)SDPath, 0U);
-
-  {
-    static const char console_footer[] =
-        "=== capture complete ===\r\n";
-    TransmitUartText(console_footer, (uint16_t)(sizeof(console_footer) - 1U));
-  }
+	  FRESULT fres = f_write(&SDFile, sd_write_chunk, n * sizeof(int32_t), &bw);
+	  if ((fres != FR_OK) || (bw != (n * sizeof(int32_t))))
+	  {
+		char err[96];
+		int len = snprintf(err, sizeof(err),
+						   "SD ERR: fres=%d, bw=%u/%u, written=%lu, addr=0x%08lX\r\n",
+						   (int)fres, (unsigned int)bw,
+						   (unsigned int)(n * sizeof(int32_t)),
+						   (unsigned long)samples_written,
+						   (unsigned long)(uintptr_t)sd_write_chunk);
+		TransmitUartText(err, (uint16_t)len);
+		Error_Handler();
+	  }
+	  samples_written += n;
+	}
 }
 
+  (void)HAL_I2S_DMAStop(&hi2s1);
+  if (f_sync(&SDFile) != FR_OK) Error_Handler();
+  if (f_close(&SDFile) != FR_OK) Error_Handler();
+
+  char msg_peak[96];
+  (void)snprintf(msg_peak, sizeof(msg_peak),
+                 "=== Capture peak: %ld (24-bit) ===\r\n",
+                 (long)capture_peak);
+  TransmitUartText(msg_peak, (uint16_t)strlen(msg_peak));
+
+  const char msg_conv[] = "=== Converting BIN -> WAV & CSV (please wait ~5s) ===\r\n";
+  TransmitUartText(msg_conv, (uint16_t)(sizeof(msg_conv) - 1U));
+
+  CreateWavAndCsvFromBin(bin_path, wav_path, csv_path);
+  (void)f_mount(NULL, (TCHAR const *)SDPath, 0U);
+
+  const char msg_done[] = "=== Done! Check .bin, .wav, .csv on SD ===\r\n";
+  TransmitUartText(msg_done, (uint16_t)(sizeof(msg_done) - 1U));
+}
 /* USER CODE END 4 */
 
  /* MPU Configuration */
@@ -701,6 +674,8 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+	const char msg_conv[] = "=== ERR ===\r\n";
+	  TransmitUartText(msg_conv, (uint16_t)(sizeof(msg_conv) - 1U));
   __disable_irq();
   while (1)
   {
