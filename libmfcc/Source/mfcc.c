@@ -282,6 +282,9 @@ mfcc_status_t mfcc_compute_frame(mfcc_context_t *context,
         return MFCC_ERROR_ARGUMENT;
     }
     config = &context->config;
+
+    bins = config->n_fft / 2U + 1U;
+    
     if (config->dc_removal) {
         float mean = 0.0f;
         for (i = 0U; i < config->n_fft; ++i) {
@@ -304,10 +307,10 @@ mfcc_status_t mfcc_compute_frame(mfcc_context_t *context,
     memset(context->fft, 0, (size_t)config->n_fft * 2U * sizeof(float));
     for (i = 0U; i < config->n_fft; ++i) {
         context->fft[2U * i] = context->frame[i];
+        context->frame[i] *= context->window[i];
     }
     fft_reference(context);
 
-    bins = config->n_fft / 2U + 1U;
     for (i = 0U; i < bins; ++i) {
         float real = context->fft[2U * i];
         float imag = context->fft[2U * i + 1U];
