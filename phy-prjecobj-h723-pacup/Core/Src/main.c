@@ -34,14 +34,12 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define I2S_SAMPLE_RATE        32000U
-#define RECORDING_SECONDS      10U
-#define RECORDING_SAMPLES      (I2S_SAMPLE_RATE * RECORDING_SECONDS)
+#define RAM_CAPTURE_SAMPLES    32000U  /* Thu tron 1.0 giay o 32kHz vao RAM */
 #define I2S_DMA_SAMPLES        2048U
 #define I2S_DMA_HALF_SAMPLES   (I2S_DMA_SAMPLES / 2U)
-#define RING_BUF_SAMPLES       16384U  /* Phai la luy thua cua 2 (chua 512ms audio) */
-#define WARMUP_HALF_BLOCKS     20U      /* Ghi ngay tu dau; khong bo sot tin hieu thu am */
+#define WARMUP_HALF_BLOCKS     20U     /* Bo qua ~320ms luc mic moi khoi dong */
 #define UART_TX_TIMEOUT_MS     100U
-#define GENERATE_CSV_FILE      1U      /* Dat 0 neu chi can .bin va .wav cho nhanh */
+#define GENERATE_CSV_FILE      1U      /* Dat 0 neu chi can .bin va .wav */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -63,13 +61,10 @@ SD_HandleTypeDef hsd1;
 __attribute__((section(".dma_buffer"), aligned(32)))
 static uint32_t i2s_rx_buffer[I2S_DMA_SAMPLES];
 
-static int32_t ring_buf[RING_BUF_SAMPLES];
-static volatile uint32_t ring_head = 0U;
-static volatile uint32_t ring_tail = 0U;
+static int16_t ram_audio[RAM_CAPTURE_SAMPLES]; /* 64KB RAM luu tron 1 giay */
 static volatile uint32_t warmup_left = 0U;
 static volatile uint32_t samples_captured = 0U;
 static volatile uint32_t i2s_dma_error = 0U;
-static volatile uint32_t ring_overflow = 0U;
 static volatile int32_t capture_peak = 0;
 /* USER CODE END PV */
 
@@ -82,12 +77,9 @@ static void MX_I2S1_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_SDMMC1_SD_Init(void);
 /* USER CODE BEGIN PFP */
-static void RecordI2S10Seconds(void);
+static void TestCapture1SecondPureRam(void);
 static int32_t DecodeI2S24(uint32_t raw_sample);
-static void PushI2SHalfToRing(const uint32_t *half_samples);
-static void CreateWavAndCsvFromBin(const char *bin_path,
-                                   const char *wav_path,
-                                   const char *csv_path);
+static void PushI2SHalfToRam(const uint32_t *half_samples);
 static void TransmitUartText(const char *text, uint16_t length);
 /* USER CODE END PFP */
 
@@ -99,7 +91,7 @@ static int32_t DecodeI2S24(uint32_t raw_sample)
   return (int32_t)raw_sample >> 8;
 }
 
-static void PushI2SHalfToRing(const uint32_t *half_samples)
+static void PushI2SHalfToRam(const uint32_t *half_samples)
 {
   if (warmup_left > 0U)
   {
@@ -109,27 +101,22 @@ static void PushI2SHalfToRing(const uint32_t *half_samples)
 
   for (uint32_t i = 0U; i < I2S_DMA_HALF_SAMPLES; i += 2U)
   {
-    if (samples_captured >= RECORDING_SAMPLES)
+    if (samples_captured >= RAM_CAPTURE_SAMPLES)
     {
       break;
     }
 
-    uint32_t next_head = (ring_head + 1U) & (RING_BUF_SAMPLES - 1U);
-    if (next_head == ring_tail)
-    {
-      ring_overflow = 1U;
-      break;
-    }
+    int32_t sL = DecodeI2S24(half_samples[i]) >> 8;
+    int32_t sR = DecodeI2S24(half_samples[i + 1U]) >> 8;
+    int32_t s16 = (sL != 0) ? sL : sR; /* Neu Kenh L bi 0 thi lay thu Kenh R */
 
-    int32_t sample = DecodeI2S24(half_samples[i]);
-    ring_buf[ring_head] = sample; /* Kenh L (index chan) */
-    int32_t magnitude = (sample < 0) ? -(sample + 1) + 1 : sample;
-    if (magnitude > capture_peak)
-    {
-      capture_peak = magnitude;
-    }
+    /* Kenh L (index chan): chuyen 24-bit sang 16-bit co dau */
+//    int32_t s16 = DecodeI2S24(half_samples[i]) >> 8;
+    if (s16 > 32767)  s16 = 32767;
+    if (s16 < -32768) s16 = -32768;
+
+    ram_audio[samples_captured] = (int16_t)s16;
     __DMB();
-    ring_head = next_head;
     samples_captured++;
   }
 }
@@ -138,7 +125,7 @@ void HAL_I2S_RxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 {
   if (hi2s == &hi2s1)
   {
-    PushI2SHalfToRing(&i2s_rx_buffer[0]);
+    PushI2SHalfToRam(&i2s_rx_buffer[0]);
   }
 }
 
@@ -146,7 +133,7 @@ void HAL_I2S_RxCpltCallback(I2S_HandleTypeDef *hi2s)
 {
   if (hi2s == &hi2s1)
   {
-    PushI2SHalfToRing(&i2s_rx_buffer[I2S_DMA_HALF_SAMPLES]);
+    PushI2SHalfToRam(&i2s_rx_buffer[I2S_DMA_HALF_SAMPLES]);
   }
 }
 
@@ -199,7 +186,7 @@ int main(void)
   MX_SDMMC1_SD_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
-  RecordI2S10Seconds();
+  TestCapture1SecondPureRam();
 
   /* USER CODE END 2 */
 
@@ -292,13 +279,13 @@ static void MX_I2S1_Init(void)
   hi2s1.Init.Mode = I2S_MODE_MASTER_RX;
   hi2s1.Init.Standard = I2S_STANDARD_PHILIPS;
   hi2s1.Init.DataFormat = I2S_DATAFORMAT_24B;
-  hi2s1.Init.MCLKOutput = I2S_MCLKOUTPUT_ENABLE;
+  hi2s1.Init.MCLKOutput = I2S_MCLKOUTPUT_DISABLE;
   hi2s1.Init.AudioFreq = I2S_AUDIOFREQ_32K;
   hi2s1.Init.CPOL = I2S_CPOL_LOW;
   hi2s1.Init.FirstBit = I2S_FIRSTBIT_MSB;
   hi2s1.Init.WSInversion = I2S_WS_INVERSION_DISABLE;
   hi2s1.Init.Data24BitAlignment = I2S_DATA_24BIT_ALIGNMENT_LEFT;
-  hi2s1.Init.MasterKeepIOState = I2S_MASTER_KEEP_IO_STATE_DISABLE;
+  hi2s1.Init.MasterKeepIOState = I2S_MASTER_KEEP_IO_STATE_ENABLE;
   if (HAL_I2S_Init(&hi2s1) != HAL_OK)
   {
     Error_Handler();
@@ -446,194 +433,157 @@ static void WriteLittleEndian16(uint8_t *dst, uint16_t val)
   dst[1] = (uint8_t)((val >> 8) & 0xFFU);
 }
 
-static void CreateWavAndCsvFromBin(const char *bin_path,
-                                   const char *wav_path,
-                                   const char *csv_path)
+static void WriteRamBytesToSd(FIL *file, const uint8_t *src, uint32_t total_bytes,
+                              uint8_t *dma_scratch, uint32_t scratch_size)
 {
-  static FIL bin_file;
-  static FIL out_file;
-  __attribute__((section(".dma_buffer"), aligned(32))) static int32_t in_chunk[512];
-  __attribute__((section(".dma_buffer"), aligned(32))) static int16_t wav_chunk[512];
-  __attribute__((section(".dma_buffer"), aligned(32))) static char csv_chunk[4096];
-  uint8_t wav_hdr[44];
-  UINT br = 0U, bw = 0U;
-  uint32_t data_bytes_16 = RECORDING_SAMPLES * 2U;
+  UINT bw = 0U;
+  uint32_t rem = total_bytes;
+  const uint8_t *p = src;
 
-  /* 1. Tao file WAV 16-bit PCM (32kHz, Mono) de nghe truc tiep tren PC */
-  memcpy(&wav_hdr[0],  "RIFF", 4);
-  WriteLittleEndian32(&wav_hdr[4],  36U + data_bytes_16);
-  memcpy(&wav_hdr[8],  "WAVE", 4);
-  memcpy(&wav_hdr[12], "fmt ", 4);
-  WriteLittleEndian32(&wav_hdr[16], 16U);              /* PCM */
-  WriteLittleEndian16(&wav_hdr[20], 1U);               /* Format = 1 */
-  WriteLittleEndian16(&wav_hdr[22], 1U);               /* 1 Kenh (Mono) */
-  WriteLittleEndian32(&wav_hdr[24], I2S_SAMPLE_RATE);  /* 32000 Hz */
-  WriteLittleEndian32(&wav_hdr[28], I2S_SAMPLE_RATE * 2U);
-  WriteLittleEndian16(&wav_hdr[32], 2U);               /* BlockAlign */
-  WriteLittleEndian16(&wav_hdr[34], 16U);              /* 16 bits/sample */
-  memcpy(&wav_hdr[36], "data", 4);
-  WriteLittleEndian32(&wav_hdr[40], data_bytes_16);
-
-  if (f_open(&bin_file, bin_path, FA_READ) != FR_OK) Error_Handler();
-  if (f_open(&out_file, wav_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) Error_Handler();
-  if ((f_write(&out_file, wav_hdr, 44U, &bw) != FR_OK) || (bw != 44U)) Error_Handler();
-
-  while (1)
+  while (rem > 0U)
   {
-    if (f_read(&bin_file, in_chunk, sizeof(in_chunk), &br) != FR_OK) Error_Handler();
-    if (br == 0U) break;
-    uint32_t n = br / sizeof(int32_t);
-    for (uint32_t i = 0U; i < n; ++i)
+    uint32_t chunk = (rem > scratch_size) ? scratch_size : rem;
+    memcpy(dma_scratch, p, chunk);
+    if ((f_write(file, dma_scratch, chunk, &bw) != FR_OK) || (bw != chunk))
     {
-      /* Chuyen 24-bit co dau sang 16-bit WAV (dich bo 8 bit thap) */
-      wav_chunk[i] = (int16_t)(in_chunk[i] >> 8);
+      Error_Handler();
     }
-    if ((f_write(&out_file, wav_chunk, n * sizeof(int16_t), &bw) != FR_OK) ||
-        (bw != n * sizeof(int16_t)))
+    p += chunk;
+    rem -= chunk;
+  }
+}
+
+static void TestCapture1SecondPureRam(void)
+{
+  __attribute__((section(".dma_buffer"), aligned(32))) static uint8_t sd_buf[4096];
+  char bin_path[32], wav_path[32], csv_path[32];
+  UINT bw = 0U;
+
+  const char msg1[] = "\r\n=== Capturing 1s purely to RAM (SD idle)... ===\r\n";
+  TransmitUartText(msg1, (uint16_t)(sizeof(msg1) - 1U));
+
+  samples_captured = 0U;
+  warmup_left = WARMUP_HALF_BLOCKS;
+  i2s_dma_error = 0U;
+  capture_peak = 0;
+
+  if (HAL_I2S_Receive_DMA(&hi2s1, (uint16_t *)i2s_rx_buffer, I2S_DMA_SAMPLES) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* Pha 1: Thu du 1 giay (32,000 mau) vao RAM, KHONG dung vao the SD */
+  while (samples_captured < RAM_CAPTURE_SAMPLES)
+  {
+    if (i2s_dma_error != 0U)
     {
       Error_Handler();
     }
   }
-  f_close(&out_file);
-  f_close(&bin_file);
+
+  /* Dung han I2S DMA truoc khi ghi the SD */
+  (void)HAL_I2S_DMAStop(&hi2s1);
+
+  /* Khu DC Offset (loai bo muc am co dinh cua INMP441, keo tam song ve 0) */
+  int64_t sum = 0;
+  for (uint32_t i = 0U; i < RAM_CAPTURE_SAMPLES; ++i)
+  {
+    sum += ram_audio[i];
+  }
+  int32_t dc_mean = (int32_t)(sum / (int64_t)RAM_CAPTURE_SAMPLES);
+
+  for (uint32_t i = 0U; i < RAM_CAPTURE_SAMPLES; ++i)
+  {
+    int32_t v = (int32_t)ram_audio[i] - dc_mean;
+    if (v > 32767)  v = 32767;
+    if (v < -32768) v = -32768;
+    ram_audio[i] = (int16_t)v;
+
+    int32_t mag = (v < 0) ? -v : v;
+    if (mag > capture_peak)
+    {
+      capture_peak = mag;
+    }
+  }
+
+  char msg_pk[80];
+  int len = snprintf(msg_pk, sizeof(msg_pk),
+                     "=== RAM capture done! DC_offset=%ld, Peak=%ld (16-bit) ===\r\n",
+                     (long)dc_mean, (long)capture_peak);
+  TransmitUartText(msg_pk, (uint16_t)len);
+
+  /* Pha 2: Mount the SD va xuat .bin, .wav, .csv */
+  if (retSD != 0U) Error_Handler();
+  if (f_mount(&SDFatFS, (TCHAR const *)SDPath, 1U) != FR_OK) Error_Handler();
+
+  (void)snprintf(bin_path, sizeof(bin_path), "%sram_1s.bin", SDPath);
+  (void)snprintf(wav_path, sizeof(wav_path), "%sram_1s.wav", SDPath);
+  (void)snprintf(csv_path, sizeof(csv_path), "%sram_1s.csv", SDPath);
+
+  uint32_t data_bytes = RAM_CAPTURE_SAMPLES * (uint32_t)sizeof(int16_t);
+
+  /* 1. Luu file .BIN (64,000 bytes int16_t tho) */
+  if (f_open(&SDFile, bin_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) Error_Handler();
+  WriteRamBytesToSd(&SDFile, (const uint8_t *)ram_audio, data_bytes, sd_buf, sizeof(sd_buf));
+  f_close(&SDFile);
+
+  /* 2. Luu file .WAV (32kHz, 16-bit, Mono) */
+  uint8_t wav_hdr[44];
+  memcpy(&wav_hdr[0],  "RIFF", 4);
+  WriteLittleEndian32(&wav_hdr[4],  36U + data_bytes);
+  memcpy(&wav_hdr[8],  "WAVE", 4);
+  memcpy(&wav_hdr[12], "fmt ", 4);
+  WriteLittleEndian32(&wav_hdr[16], 16U);
+  WriteLittleEndian16(&wav_hdr[20], 1U);
+  WriteLittleEndian16(&wav_hdr[22], 1U);
+  WriteLittleEndian32(&wav_hdr[24], I2S_SAMPLE_RATE);
+  WriteLittleEndian32(&wav_hdr[28], I2S_SAMPLE_RATE * 2U);
+  WriteLittleEndian16(&wav_hdr[32], 2U);
+  WriteLittleEndian16(&wav_hdr[34], 16U);
+  memcpy(&wav_hdr[36], "data", 4);
+  WriteLittleEndian32(&wav_hdr[40], data_bytes);
+
+  if (f_open(&SDFile, wav_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) Error_Handler();
+  memcpy(sd_buf, wav_hdr, 44U);
+  if ((f_write(&SDFile, sd_buf, 44U, &bw) != FR_OK) || (bw != 44U)) Error_Handler();
+  WriteRamBytesToSd(&SDFile, (const uint8_t *)ram_audio, data_bytes, sd_buf, sizeof(sd_buf));
+  f_close(&SDFile);
 
 #if GENERATE_CSV_FILE
-  /* 2. Xuat file CSV muot ma tu file BIN (khong anh huong DMA) */
-  if (f_open(&bin_file, bin_path, FA_READ) != FR_OK) Error_Handler();
-  if (f_open(&out_file, csv_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) Error_Handler();
-
-  static const char csv_hdr[] = "sample_index,sample_24bit\r\n";
-  if ((f_write(&out_file, csv_hdr, sizeof(csv_hdr) - 1U, &bw) != FR_OK) ||
+  /* 3. Luu file .CSV */
+  if (f_open(&SDFile, csv_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) Error_Handler();
+  static const char csv_hdr[] = "sample_index,sample_16bit\r\n";
+  memcpy(sd_buf, csv_hdr, sizeof(csv_hdr) - 1U);
+  if ((f_write(&SDFile, sd_buf, sizeof(csv_hdr) - 1U, &bw) != FR_OK) ||
       (bw != sizeof(csv_hdr) - 1U))
   {
     Error_Handler();
   }
 
-  uint32_t idx = 0U;
-  while (1)
+  UINT pos = 0U;
+  for (uint32_t i = 0U; i < RAM_CAPTURE_SAMPLES; ++i)
   {
-    if (f_read(&bin_file, in_chunk, sizeof(in_chunk), &br) != FR_OK) Error_Handler();
-    if (br == 0U) break;
-    uint32_t n = br / sizeof(int32_t);
-    UINT csv_len = 0U;
-    for (uint32_t i = 0U; i < n; ++i)
+    int w = snprintf((char *)&sd_buf[pos], sizeof(sd_buf) - pos,
+                     "%lu,%d\r\n", (unsigned long)i, (int)ram_audio[i]);
+    if ((w < 0) || ((UINT)w >= (sizeof(sd_buf) - pos))) Error_Handler();
+    pos += (UINT)w;
+    if (pos > (sizeof(sd_buf) - 32U))
     {
-      int w = snprintf(&csv_chunk[csv_len], sizeof(csv_chunk) - csv_len,
-                       "%lu,%ld\r\n", (unsigned long)idx++, (long)in_chunk[i]);
-      if ((w < 0) || ((UINT)w >= (sizeof(csv_chunk) - csv_len))) Error_Handler();
-      csv_len += (UINT)w;
-      if (csv_len > (sizeof(csv_chunk) - 64U))
-      {
-        if ((f_write(&out_file, csv_chunk, csv_len, &bw) != FR_OK) || (bw != csv_len))
-          Error_Handler();
-        csv_len = 0U;
-      }
-    }
-    if (csv_len > 0U)
-    {
-      if ((f_write(&out_file, csv_chunk, csv_len, &bw) != FR_OK) || (bw != csv_len))
-        Error_Handler();
+      if ((f_write(&SDFile, sd_buf, pos, &bw) != FR_OK) || (bw != pos)) Error_Handler();
+      pos = 0U;
     }
   }
-  f_close(&out_file);
-  f_close(&bin_file);
-#else
-  (void)csv_path;
-#endif
-}
-
-static void RecordI2S10Seconds(void)
-{
-  __attribute__((section(".dma_buffer"), aligned(32))) static int32_t sd_write_chunk[1024]; /* 4KB nam trong D2 SRAM, chuan DMA */
-  char bin_path[32], wav_path[32], csv_path[32];
-  uint32_t samples_written = 0U;
-  UINT bw = 0U;
-
-  if (retSD != 0U) Error_Handler();
-  if (f_mount(&SDFatFS, (TCHAR const *)SDPath, 1U) != FR_OK) Error_Handler();
-
-  (void)snprintf(bin_path, sizeof(bin_path), "%si2s_32k_10s.bin", SDPath);
-  (void)snprintf(wav_path, sizeof(wav_path), "%si2s_32k_10s.wav", SDPath);
-  (void)snprintf(csv_path, sizeof(csv_path), "%si2s_32k_10s.csv", SDPath);
-
-  if (f_open(&SDFile, bin_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) Error_Handler();
-
-  const char msg_start[] = "\r\n=== Recording 10s (32kHz) to BIN ===\r\n";
-  TransmitUartText(msg_start, (uint16_t)(sizeof(msg_start) - 1U));
-
-//  memset(i2s_tx_silence, 0, sizeof(i2s_tx_silence));
-  ring_head = 0U;
-  ring_tail = 0U;
-  samples_captured = 0U;
-  warmup_left = WARMUP_HALF_BLOCKS;
-  i2s_dma_error = 0U;
-  ring_overflow = 0U;
-  capture_peak = 0;
-
-  /* SUA LOI QUAN TRONG: Truyen dung I2S_DMA_SAMPLES (KHONG nhan * 2U!) */
-  if (HAL_I2S_Receive_DMA(&hi2s1,
-                            (uint16_t *)i2s_rx_buffer,
-							(uint16_t)(I2S_DMA_SAMPLES)) != HAL_OK)
-    {
-      Error_Handler();
-    }
-
-  while (samples_written < RECORDING_SAMPLES)
+  if (pos > 0U)
   {
-    if ((i2s_dma_error != 0U) || (ring_overflow != 0U))
-    {
-      Error_Handler();
-    }
+    if ((f_write(&SDFile, sd_buf, pos, &bw) != FR_OK) || (bw != pos)) Error_Handler();
+  }
+  f_close(&SDFile);
+#endif
 
-    uint32_t head = ring_head;
-    uint32_t avail = (head - ring_tail) & (RING_BUF_SAMPLES - 1U);
-
-
-    /* Ghi theo tung cuc lon 1024 mau (4KB) hoac ghi not phan cuoi */
-    if ((avail >= 1024U) || ((samples_captured >= RECORDING_SAMPLES) && (avail > 0U)))
-	{
-	  uint32_t n = (avail > 1024U) ? 1024U : avail;
-	  for (uint32_t i = 0U; i < n; ++i)
-	  {
-		sd_write_chunk[i] = ring_buf[ring_tail];
-		ring_tail = (ring_tail + 1U) & (RING_BUF_SAMPLES - 1U);
-	  }
-
-	  FRESULT fres = f_write(&SDFile, sd_write_chunk, n * sizeof(int32_t), &bw);
-	  if ((fres != FR_OK) || (bw != (n * sizeof(int32_t))))
-	  {
-		char err[96];
-		int len = snprintf(err, sizeof(err),
-						   "SD ERR: fres=%d, bw=%u/%u, written=%lu, addr=0x%08lX\r\n",
-						   (int)fres, (unsigned int)bw,
-						   (unsigned int)(n * sizeof(int32_t)),
-						   (unsigned long)samples_written,
-						   (unsigned long)(uintptr_t)sd_write_chunk);
-		TransmitUartText(err, (uint16_t)len);
-		Error_Handler();
-	  }
-	  samples_written += n;
-	}
-}
-
-  (void)HAL_I2S_DMAStop(&hi2s1);
-  if (f_sync(&SDFile) != FR_OK) Error_Handler();
-  if (f_close(&SDFile) != FR_OK) Error_Handler();
-
-  char msg_peak[96];
-  (void)snprintf(msg_peak, sizeof(msg_peak),
-                 "=== Capture peak: %ld (24-bit) ===\r\n",
-                 (long)capture_peak);
-  TransmitUartText(msg_peak, (uint16_t)strlen(msg_peak));
-
-  const char msg_conv[] = "=== Converting BIN -> WAV & CSV (please wait ~5s) ===\r\n";
-  TransmitUartText(msg_conv, (uint16_t)(sizeof(msg_conv) - 1U));
-
-  CreateWavAndCsvFromBin(bin_path, wav_path, csv_path);
   (void)f_mount(NULL, (TCHAR const *)SDPath, 0U);
 
-  const char msg_done[] = "=== Done! Check .bin, .wav, .csv on SD ===\r\n";
-  TransmitUartText(msg_done, (uint16_t)(sizeof(msg_done) - 1U));
+  const char msg2[] = "=== Saved ram_1s.bin, ram_1s.wav, ram_1s.csv! ===\r\n";
+  TransmitUartText(msg2, (uint16_t)(sizeof(msg2) - 1U));
 }
 /* USER CODE END 4 */
 
