@@ -24,6 +24,8 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
+#include "kiss_fftr.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,6 +44,8 @@
 #define WARMUP_HALF_BLOCKS     25U     /* 400ms dau: 5 block bo mute + 20 block on dinh DC */
 #define UART_TX_TIMEOUT_MS     100U
 #define GENERATE_CSV_FILE      1U      /* Dat 0 neu chi can .bin va .wav */
+#define FFT_SIZE               1024U
+#define FFT_BINS               ((FFT_SIZE / 2U) + 1U) /* 513 bins: 0 Hz .. 16000 Hz */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -91,6 +95,7 @@ static void CreateWavAndCsvFromBin(const char *bin_path,
                                    const char *wav_path,
                                    const char *csv_path);
 static void TransmitUartText(const char *text, uint16_t length);
+static void ComputeAndSaveFftCsvFromBin(const char *bin_path, const char *fft_csv_path);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -559,6 +564,155 @@ static void CreateWavAndCsvFromBin(const char *bin_path,
 #endif
 }
 
+static void FormatFixed2(char *buf, size_t sz, float val)
+{
+  int32_t scaled = (int32_t)lroundf(val * 100.0f);
+  if (scaled < 0)
+  {
+    int32_t abs_s = -scaled;
+    (void)snprintf(buf, sz, "-%ld.%02ld", (long)(abs_s / 100), (long)(abs_s % 100));
+  }
+  else
+  {
+    (void)snprintf(buf, sz, "%ld.%02ld", (long)(scaled / 100), (long)(scaled % 100));
+  }
+}
+
+static void ComputeAndSaveFftCsvFromBin(const char *bin_path, const char *fft_csv_path)
+{
+  static FIL bin_file;
+  static FIL fft_file;
+  /* Cap phat bo nho tinh cho KissFFT (khong dung malloc) */
+  __attribute__((aligned(8))) static uint8_t fft_work_mem[16384];
+  static float hann_win[FFT_SIZE];
+  static float fft_in[FFT_SIZE];
+  static kiss_fft_cpx fft_out[FFT_BINS];
+  static float avg_mag[FFT_BINS];
+  static float loudest_mag[FFT_BINS];
+
+  /* Buffer giao tiep SDMMC1 bat buoc nam trong .dma_buffer (0x30000000) */
+  __attribute__((section(".dma_buffer"), aligned(32))) static int16_t pcm_frame[FFT_SIZE];
+  __attribute__((section(".dma_buffer"), aligned(32))) static char fft_csv_buf[4096];
+
+  size_t mem_len = sizeof(fft_work_mem);
+  kiss_fftr_cfg cfg = kiss_fftr_alloc((int)FFT_SIZE, 0, fft_work_mem, &mem_len);
+  if (cfg == NULL)
+  {
+    Error_Handler();
+  }
+
+  /* Tao bang cua so Hann 1 lan */
+  const float two_pi = 6.28318530718f;
+  for (uint32_t i = 0U; i < FFT_SIZE; ++i)
+  {
+    hann_win[i] = 0.5f * (1.0f - cosf(two_pi * (float)i / (float)(FFT_SIZE - 1U)));
+  }
+
+  memset(avg_mag, 0, sizeof(avg_mag));
+  memset(loudest_mag, 0, sizeof(loudest_mag));
+
+  if (f_open(&bin_file, bin_path, FA_READ) != FR_OK) Error_Handler();
+
+  UINT br = 0U, bw = 0U;
+  uint32_t frame_count = 0U;
+  float max_frame_rms = -1.0f;
+
+  /* Doc tung khung 1024 mau tu file BIN va tinh KissFFT */
+  while (1)
+  {
+    if (f_read(&bin_file, pcm_frame, sizeof(pcm_frame), &br) != FR_OK) Error_Handler();
+    if (br < sizeof(pcm_frame)) break; /* Bo khung le cuoi cung neu khong du 1024 mau */
+
+    float sum_sq = 0.0f;
+    for (uint32_t i = 0U; i < FFT_SIZE; ++i)
+    {
+      float x = (float)pcm_frame[i];
+      sum_sq += x * x;
+      fft_in[i] = x * hann_win[i];
+    }
+
+    kiss_fftr(cfg, fft_in, fft_out);
+
+    float frame_rms = sqrtf(sum_sq / (float)FFT_SIZE);
+    uint8_t is_loudest = (frame_rms > max_frame_rms) ? 1U : 0U;
+    if (is_loudest != 0U)
+    {
+      max_frame_rms = frame_rms;
+    }
+
+    /* Chuan hoa bien do theo cua so Hann (coherent gain = 0.5 -> nhan 4/N cho AC) */
+    const float scale_ac = 4.0f / (float)FFT_SIZE;
+    const float scale_dc = 2.0f / (float)FFT_SIZE;
+
+    for (uint32_t k = 0U; k < FFT_BINS; ++k)
+    {
+      float re = fft_out[k].r;
+      float im = fft_out[k].i;
+      float mag = sqrtf(re * re + im * im);
+      float amp = mag * ((k == 0U || k == (FFT_BINS - 1U)) ? scale_dc : scale_ac);
+
+      avg_mag[k] += amp;
+      if (is_loudest != 0U)
+      {
+        loudest_mag[k] = amp;
+      }
+    }
+    frame_count++;
+  }
+  f_close(&bin_file);
+
+  if (frame_count > 0U)
+  {
+    for (uint32_t k = 0U; k < FFT_BINS; ++k)
+    {
+      avg_mag[k] /= (float)frame_count;
+    }
+  }
+
+  /* Xuat ket qua pho tan so ra file CSV de kiem tra */
+  if (f_open(&fft_file, fft_csv_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) Error_Handler();
+
+  static const char hdr[] = "bin,freq_hz,avg_mag,loudest_mag,avg_dbfs\r\n";
+  memcpy(fft_csv_buf, hdr, sizeof(hdr) - 1U);
+  if ((f_write(&fft_file, fft_csv_buf, sizeof(hdr) - 1U, &bw) != FR_OK) ||
+      (bw != (sizeof(hdr) - 1U)))
+  {
+    Error_Handler();
+  }
+
+  UINT pos = 0U;
+  char s_avg[24], s_loud[24], s_db[24];
+  for (uint32_t k = 0U; k < FFT_BINS; ++k)
+  {
+    uint32_t freq_x100 = (k * I2S_SAMPLE_RATE * 100U) / FFT_SIZE;
+    float dbfs = 20.0f * log10f((avg_mag[k] / 32768.0f) + 1e-7f);
+
+    FormatFixed2(s_avg, sizeof(s_avg), avg_mag[k]);
+    FormatFixed2(s_loud, sizeof(s_loud), loudest_mag[k]);
+    FormatFixed2(s_db, sizeof(s_db), dbfs);
+
+    int w = snprintf(&fft_csv_buf[pos], sizeof(fft_csv_buf) - pos,
+                     "%lu,%lu.%02lu,%s,%s,%s\r\n",
+                     (unsigned long)k,
+                     (unsigned long)(freq_x100 / 100U),
+                     (unsigned long)(freq_x100 % 100U),
+                     s_avg, s_loud, s_db);
+    if ((w < 0) || ((UINT)w >= (sizeof(fft_csv_buf) - pos))) Error_Handler();
+    pos += (UINT)w;
+
+    if (pos > (sizeof(fft_csv_buf) - 96U))
+    {
+      if ((f_write(&fft_file, fft_csv_buf, pos, &bw) != FR_OK) || (bw != pos)) Error_Handler();
+      pos = 0U;
+    }
+  }
+  if (pos > 0U)
+  {
+    if ((f_write(&fft_file, fft_csv_buf, pos, &bw) != FR_OK) || (bw != pos)) Error_Handler();
+  }
+  f_close(&fft_file);
+}
+
 static void RecordI2S10Seconds(void)
 {
   __attribute__((section(".dma_buffer"), aligned(32))) static int16_t sd_write_chunk[2048]; /* 4KB */
@@ -633,7 +787,15 @@ static void RecordI2S10Seconds(void)
   const char msg_conv[] = "=== Converting BIN -> WAV & CSV (please wait ~5s) ===\r\n";
   TransmitUartText(msg_conv, (uint16_t)(sizeof(msg_conv) - 1U));
 
+  char fft_csv_path[32];
+  (void)snprintf(fft_csv_path, sizeof(fft_csv_path), "%si2s_32k_fft.csv", SDPath);
+
   CreateWavAndCsvFromBin(bin_path, wav_path, csv_path);
+
+  const char msg_fft[] = "=== Computing KissFFT -> i2s_32k_fft.csv ===\r\n";
+  TransmitUartText(msg_fft, (uint16_t)(sizeof(msg_fft) - 1U));
+  ComputeAndSaveFftCsvFromBin(bin_path, fft_csv_path);
+
   (void)f_mount(NULL, (TCHAR const *)SDPath, 0U);
 
   const char msg_done[] = "=== Done! Check .bin, .wav, .csv on SD ===\r\n";
