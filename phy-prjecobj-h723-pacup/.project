@@ -31,6 +31,11 @@
 	</natures>
 	<linkedResources>
 		<link>
+			<name>Source</name>
+			<type>2</type>
+			<location>C:/Users/ADMIN/Documents/__sub_ce201/__prj_svc_ce201/libmfcc/Source</location>
+		</link>
+		<link>
 			<name>libfft</name>
 			<type>2</type>
 			<location>C:/Users/ADMIN/Documents/__sub_ce201/__prj_svc_ce201/libfft</location>

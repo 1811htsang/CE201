@@ -26,6 +26,7 @@
 #include <string.h>
 #include <math.h>
 #include "kiss_fftr.h"
+#include "mfcc.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,6 +47,8 @@
 #define GENERATE_CSV_FILE      1U      /* Dat 0 neu chi can .bin va .wav */
 #define FFT_SIZE               1024U
 #define FFT_BINS               ((FFT_SIZE / 2U) + 1U) /* 513 bins: 0 Hz .. 16000 Hz */
+#define MFCC_WS_BYTES          (104U * 1024U) /* Du cho n_fft=1024, n_mels=40, n_mfcc=13 */
+#define MFCC_UART_PREVIEW_MAX  10U            /* So khung in mau ra PuTTY (dat 700 neu muon in het 624 khung) */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -96,6 +99,7 @@ static void CreateWavAndCsvFromBin(const char *bin_path,
                                    const char *csv_path);
 static void TransmitUartText(const char *text, uint16_t length);
 static void ComputeAndSaveFftCsvFromBin(const char *bin_path, const char *fft_csv_path);
+static void ComputeAndSaveMfccFromBin(const char *bin_path, const char *mfcc_txt_path);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -713,6 +717,160 @@ static void ComputeAndSaveFftCsvFromBin(const char *bin_path, const char *fft_cs
   f_close(&fft_file);
 }
 
+static void ComputeAndSaveMfccFromBin(const char *bin_path, const char *mfcc_txt_path)
+{
+  static FIL bin_file;
+  static FIL txt_file;
+  __attribute__((aligned(4))) static uint8_t mfcc_ws[MFCC_WS_BYTES];
+  static mfcc_context_t mfcc_ctx;
+  static float frame_f32[FFT_SIZE];
+  static float mfcc_out[40]; /* Du chua toi da 40 he so MFCC */
+
+  /* Buffer doc/ghi SD bat buoc nam trong .dma_buffer (0x30000000) */
+  __attribute__((section(".dma_buffer"), aligned(32))) static int16_t pcm_hop[512];     /* 1KB */
+  __attribute__((section(".dma_buffer"), aligned(32))) static char mfcc_txt_buf[4096]; /* 4KB */
+
+  mfcc_config_t cfg;
+  mfcc_default_config(&cfg);
+  cfg.fs_hz = I2S_SAMPLE_RATE;
+  cfg.n_fft = FFT_SIZE;
+  cfg.hop = FFT_SIZE / 2U; /* 512 mau (overlap 50%) */
+  cfg.n_mels = 40U;
+  cfg.n_mfcc = 13U;
+  cfg.fmin_hz = 100.0f;
+  cfg.fmax_hz = 7000.0f;
+  /* Neu model TinyML train voi file WAV chuan hoa [-1.0, +1.0], giu 1.0f / 32768.0f.
+   * Neu model train truc tiep voi gia tri int16 tho [-32768, 32767], doi thanh 1.0f */
+  cfg.input_scale = 1.0f / 32768.0f;
+  cfg.dc_removal = 1U;
+
+  size_t needed = mfcc_workspace_size(&cfg);
+  if ((needed == 0U) || (needed > sizeof(mfcc_ws)))
+  {
+    Error_Handler();
+  }
+  if (mfcc_init(&mfcc_ctx, &cfg, mfcc_ws, sizeof(mfcc_ws)) != MFCC_OK)
+  {
+    Error_Handler();
+  }
+
+  if (f_open(&bin_file, bin_path, FA_READ) != FR_OK) Error_Handler();
+  if (f_open(&txt_file, mfcc_txt_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) Error_Handler();
+
+  /* Ghi tieu de cho file .txt */
+  static const char txt_hdr[] =
+      "# MFCC output (fs=32000Hz, n_fft=1024, hop=512, n_mels=40, n_mfcc=13)\r\n"
+      "# frame_idx, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12\r\n";
+  UINT br = 0U, bw = 0U;
+  memcpy(mfcc_txt_buf, txt_hdr, sizeof(txt_hdr) - 1U);
+  if ((f_write(&txt_file, mfcc_txt_buf, sizeof(txt_hdr) - 1U, &bw) != FR_OK) ||
+      (bw != (sizeof(txt_hdr) - 1U)))
+  {
+    Error_Handler();
+  }
+
+  /* Nap 1024 mau dau tien (2 lan doc 512 mau) cho Frame 0 */
+  for (uint32_t part = 0U; part < 2U; ++part)
+  {
+    if (f_read(&bin_file, pcm_hop, sizeof(pcm_hop), &br) != FR_OK) Error_Handler();
+    if (br < sizeof(pcm_hop))
+    {
+      f_close(&txt_file);
+      f_close(&bin_file);
+      return;
+    }
+    for (uint32_t i = 0U; i < 512U; ++i)
+    {
+      frame_f32[part * 512U + i] = (float)pcm_hop[i];
+    }
+  }
+
+  const char uart_hdr[] = "\r\n=== MFCC Preview (first frames) ===\r\n";
+  TransmitUartText(uart_hdr, (uint16_t)(sizeof(uart_hdr) - 1U));
+
+  UINT pos = 0U;
+  uint32_t frame_idx = 0U;
+  char val_str[24];
+  char uart_line[256];
+
+  while (1)
+  {
+    if (mfcc_compute_frame(&mfcc_ctx, frame_f32, mfcc_out) != MFCC_OK)
+    {
+      Error_Handler();
+    }
+
+    /* Dong goi 1 dong text cho file .txt (va in UART neu nam trong gioi han xem truoc) */
+    uint32_t line_start = pos;
+    int w = snprintf(&mfcc_txt_buf[pos], sizeof(mfcc_txt_buf) - pos,
+                     "%lu", (unsigned long)frame_idx);
+    if ((w < 0) || ((UINT)w >= (sizeof(mfcc_txt_buf) - pos))) Error_Handler();
+    pos += (UINT)w;
+
+    for (uint32_t c = 0U; c < cfg.n_mfcc; ++c)
+    {
+      FormatFixed2(val_str, sizeof(val_str), mfcc_out[c]);
+      w = snprintf(&mfcc_txt_buf[pos], sizeof(mfcc_txt_buf) - pos, ",%s", val_str);
+      if ((w < 0) || ((UINT)w >= (sizeof(mfcc_txt_buf) - pos))) Error_Handler();
+      pos += (UINT)w;
+    }
+
+    w = snprintf(&mfcc_txt_buf[pos], sizeof(mfcc_txt_buf) - pos, "\r\n");
+    if ((w < 0) || ((UINT)w >= (sizeof(mfcc_txt_buf) - pos))) Error_Handler();
+    pos += (UINT)w;
+
+    if (frame_idx < MFCC_UART_PREVIEW_MAX)
+    {
+      UINT line_len = pos - line_start;
+      if (line_len < sizeof(uart_line))
+      {
+        memcpy(uart_line, &mfcc_txt_buf[line_start], line_len);
+        TransmitUartText(uart_line, (uint16_t)line_len);
+      }
+    }
+
+    if (pos > (sizeof(mfcc_txt_buf) - 256U))
+    {
+      if ((f_write(&txt_file, mfcc_txt_buf, pos, &bw) != FR_OK) || (bw != pos))
+      {
+        Error_Handler();
+      }
+      pos = 0U;
+    }
+
+    frame_idx++;
+
+    /* Truot cua so 512 mau (50% overlap) va doc them 512 mau tiep theo */
+    memmove(&frame_f32[0], &frame_f32[512], 512U * sizeof(float));
+    if (f_read(&bin_file, pcm_hop, sizeof(pcm_hop), &br) != FR_OK) Error_Handler();
+    if (br < sizeof(pcm_hop))
+    {
+      break;
+    }
+    for (uint32_t i = 0U; i < 512U; ++i)
+    {
+      frame_f32[512U + i] = (float)pcm_hop[i];
+    }
+  }
+
+  if (pos > 0U)
+  {
+    if ((f_write(&txt_file, mfcc_txt_buf, pos, &bw) != FR_OK) || (bw != pos))
+    {
+      Error_Handler();
+    }
+  }
+
+  f_close(&txt_file);
+  f_close(&bin_file);
+
+  char uart_end[80];
+  int elen = snprintf(uart_end, sizeof(uart_end),
+                      "=== MFCC Done: %lu frames saved to %s ===\r\n",
+                      (unsigned long)frame_idx, mfcc_txt_path);
+  TransmitUartText(uart_end, (uint16_t)elen);
+}
+
 static void RecordI2S10Seconds(void)
 {
   __attribute__((section(".dma_buffer"), aligned(32))) static int16_t sd_write_chunk[2048]; /* 4KB */
@@ -787,14 +945,19 @@ static void RecordI2S10Seconds(void)
   const char msg_conv[] = "=== Converting BIN -> WAV & CSV (please wait ~5s) ===\r\n";
   TransmitUartText(msg_conv, (uint16_t)(sizeof(msg_conv) - 1U));
 
-  char fft_csv_path[32];
+  char fft_csv_path[32], mfcc_txt_path[32];
   (void)snprintf(fft_csv_path, sizeof(fft_csv_path), "%si2s_32k_fft.csv", SDPath);
+  (void)snprintf(mfcc_txt_path, sizeof(mfcc_txt_path), "%si2s_32k_mfcc.txt", SDPath);
 
   CreateWavAndCsvFromBin(bin_path, wav_path, csv_path);
 
   const char msg_fft[] = "=== Computing KissFFT -> i2s_32k_fft.csv ===\r\n";
   TransmitUartText(msg_fft, (uint16_t)(sizeof(msg_fft) - 1U));
   ComputeAndSaveFftCsvFromBin(bin_path, fft_csv_path);
+
+  const char msg_mfcc[] = "=== Computing MFCC -> i2s_32k_mfcc.txt ===\r\n";
+  TransmitUartText(msg_mfcc, (uint16_t)(sizeof(msg_mfcc) - 1U));
+  ComputeAndSaveMfccFromBin(bin_path, mfcc_txt_path);
 
   (void)f_mount(NULL, (TCHAR const *)SDPath, 0U);
 
