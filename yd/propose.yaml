@@ -1,250 +1,421 @@
-pject: "pdm-bearing-acoustic-testobj"
+pject: "PdM-AF uEDP"
 versh: "v1.1.6"
 
-# =========================================================
-# ANCHOR - Global Data Area (GDA) - Bộ đệm D2MP (Zero-copy)
-# =========================================================
+# ANCHOR - Global Data Area (GDA) - Biến toàn cục
+
+# NOTE - Define called
+# - &gdp_i2s_sample_rate
+#     name: GLB_I2S_SAMPLE_RATE
+#     type: "ui16"
+#     initial_value: 32000
+# - &gdp_record_length
+#     name: GLB_RECORD_SECONDS_COUNT
+#     type: "ui8"
+#     initial_value: 10
+# - &gdp_record_buffer_length
+#     name: GLB_RECORD_SAMPLES_LENGTH
+#     type: "ui32"
+#     initial_value: 320000  # NOTE - 32kHz * 10s, this should be config as *gdp_i2s_sample_rate * *gdp_record_length
+# - &gdp_sample_length
+#     name: GLB_I2S_DMA_SAMPLE_LENGTH
+#     type: "ui16"
+#     initial_value: 2048  # NOTE - 1 sample from I2S is ui32 arr[2048] = 8192 bytes, 2 channels, 32-bit
+# - &gdp_half_sample_length
+#     name: GLB_I2S_DMA_HALF_SAMPLE_LENGTH
+#     type: "ui16"
+#     initial_value: 1024  # NOTE - Half of I2S_DMA_SAMPLES, this should be config as *gdp_sample_length / 2
+# - &gdp_circular_buffer_length
+#     name: GLB_CIRCULAR_BUFFER_LENGTH
+#     type: "ui16"
+#     initial_value: 16384  # NOTE - Circular buffer for FAT R/W operation fallback approximation of 512ms
+# - &gdp_warmup_block_count
+#     name: GLB_WARMUP_HALF_BLOCKS
+#     type: "ui8"
+#     initial_value: 25  # NOTE - 5 blocks for mute + 20 blocks for DC stabilization (~400ms)
+# - &gdp_fft_length
+#     name: GLB_FFT_LENGTH
+#     type: "ui16"
+#     initial_value: 1024  # NOTE - Corresponds to half of I2S_DMA_SAMPLES for FFT processing
+# - &gdp_fft_bin_count
+#     name: GLB_FFT_BINS
+#     type: "ui16"
+#     initial_value: 513  # NOTE - FFT_LENGTH / 2 + 1 for real FFT output
+# - &gdp_mfcc_coeff_count
+#     name: GLB_MFCC_WS_BYTES
+#     type: "ui32"
+#     initial_value: 106496  # NOTE - FFT_LENGTH / 2 + 1 for real FFT output
+# - &gdp_mfcc_preview_count
+#     name: GLB_MFCC_UART_PREVIEW_COUNT
+#     type: "ui32"
+#     initial_value: 106496  # NOTE - FFT_LENGTH / 2 + 1 for real FFT output
+
 glbda:
-  - &gda_status
-      name: GDA_BEARING_STATUS
-      type: "const char*"
-      initial_value: "STATUS: BEARING_NORMAL"
-  - &gda_anomaly_score
-      name: GDA_ANOMALY_SCORE
-      type: "int"           # Thang điểm 0 - 100 (đại diện xác suất lỗi)
-      initial_value: 5
-  - &gda_frame_counter
-      name: GDA_FRAME_COUNTER
-      type: "int"
+  - &gdp_ring_head_current
+      name: gdp_ring_head
+      type: "sta vola ui32"
       initial_value: 0
-  - &gda_emergency_flag
-      name: GDA_EMERGENCY_TRIP
-      type: "bool"
-      initial_value: false
+  - &gdp_ring_tail_current
+      name: gdp_ring_tail
+      type: "sta vola ui32"
+      initial_value: 0
+  - &gdp_ring_overflow_trigger
+      name: gdp_ring_overflow
+      type: "sta vola ui8"
+      initial_value: 0
+  - &gdp_sample_count
+      name: gdp_sample_count
+      type: "sta vola ui32"
+      initial_value: 0
+  - &gdp_warmup_left
+      name: gdp_warmup_left
+      type: "sta vola ui8"
+      initial_value: 0
+  - &gdp_max_sample_value
+      name: gdp_max_sample_value
+      type: "sta vola i32"
+      initial_value: 0
+  - &gdp_acq_error_trigger
+      name: gdp_acq_error
+      type: "sta vola ui8"
+      initial_value: 0
+  - &gdp_holdback_value # NOTE - This variable is used to hold back the previous sample value for comparison in the next sample processing step.
+      name: gdp_holdback_value
+      type: "sta i32"
+      initial_value: 0
+  - &gdp_filter_q8_value
+      name: gdp_filter_q8_value
+      type: "sta i64"
+      initial_value: 0
+  
 
-# =========================================================
 # ANCHOR - Task List (TLIST)
-# =========================================================
+
 tlist:
-  # -------------------------------------------------------
-  # 1. TASK_NORM_USR: Điều phối toàn hệ thống (TSM)
-  # -------------------------------------------------------
   - tnorm: TASK_NORM_USR
-    tsm:
-      - id: tsm_task_usr_state_idle
-        trans:
-          - sig: *sig1-ank  # SIG_USR_START
-            goto: tsm_task_usr_state_running
-          - sig: *sig2-ank  # SIG_USR_STOP
-            goto: UEDP_TSM_STATE_STAY
-        on_ntry:
-          steps:
-            - actv: 
-                kind: c_call
-                function: printf
-                args: ['"[USR][IDLE][NTRY] PdM System Initialized. Ready for monitoring.\n"']
-        on_actv:
-          steps:
-            - actv: 
-                kind: c_stmt
-                code: |
-                  if (msg->sig == SIG_USR_START) {
-                    printf("[USR][IDLE][ACTV] Received START command. Starting Audio Sampling.\n");
-                    // Kích hoạt tác vụ thu thập âm thanh
-                    uedp_msg_t* m = uedp_msg_alloc(TASK_NORM_AUDIO_ACQ, SIG_START_ACQ, sizeof(void*));
-                    if (m) uedp_task_norm_post_msg(TASK_NORM_AUDIO_ACQ, m);
-                  }
-        on_exit:
-          actv: 
-            kind: c_call
-            function: printf
-            args: ['"[USR][IDLE][EXIT] Transitioning to RUNNING mode.\n"']
-
-      - id: tsm_task_usr_state_running
-        trans:
-          - sig: *sig2-ank  # SIG_USR_STOP
-            goto: tsm_task_usr_state_idle
-        on_ntry:
-          actv: 
-            kind: c_call
-            function: printf
-            args: ['"[USR][RUNNING][NTRY] Continuous Acoustic Monitoring Active.\n"']
-        on_actv:
-          steps:
-            - actv: 
-                kind: c_stmt
-                code: |
-                  if (msg->sig == SIG_USR_STOP) {
-                    printf("[USR][RUNNING][ACTV] Stop signal received. System shutting down.\n");
-                  }
-        on_exit:
-          steps:
-            - actv: 
-                kind: c_call
-                function: printf
-                args: ['"[USR][RUNNING][EXIT] PdM Session Closed.\n"']
+    exec:
+      - on_sig: *sig1-ank # SIG_USR_START
+        steps:
+          - actv: # NOTE - send debug info
+              kind: c_stmt
+              code: |
+                uedp_itnlog_log(
+                  HAL_GetTick(), ITNLOG_LEVEL_DEBUG,
+                  ITNLOG_TAG_TSK, "[USR] Session started.\n"
+                );
+          - actv: # NOTE - register GDA variables to GDP service
+              kind: c_stmt
+              code: |
+                uedp_gdp_register("gdp_ring_head", (ui32*)&gdp_ring_head, sizeof(gdp_ring_head));
+                uedp_gdp_register("gdp_ring_tail", (ui32*)&gdp_ring_tail, sizeof(gdp_ring_tail));
+                uedp_gdp_register("gdp_ring_overflow", (ui8*)&gdp_ring_overflow, sizeof(gdp_ring_overflow));
+                uedp_gdp_register("gdp_sample_count", (ui32*)&gdp_sample_count, sizeof(gdp_sample_count));
+                uedp_gdp_register("gdp_warmup_left", (ui8*)&gdp_warmup_left, sizeof(gdp_warmup_left));
+                uedp_gdp_register("gdp_max_sample_value", (ui32*)&gdp_max_sample_value, sizeof(gdp_max_sample_value));
+                uedp_gdp_register("gdp_acq_error", (ui8*)&gdp_acq_error, sizeof(gdp_acq_error));
+                uedp_gdp_register("gdp_holdback_value", (i32*)&gdp_holdback_value, sizeof(gdp_holdback_value));
+                uedp_gdp_register("gdp_filter_q8_value", (i64*)&gdp_filter_q8_value, sizeof(gdp_filter_q8_value));
+      - on_sig: *sig2-ank # SIG_USR_STOP
+        steps:
+          - actv:
+              kind: c_stmt
+              code: |
+                uedp_itnlog_log(
+                  HAL_GetTick(),ITNLOG_LEVEL_DEBUG,
+                  ITNLOG_TAG_TSK, "[USR] Session ended. System enter while loop.\n"
+                );
     <<: *tnorm1-ank
-
-  # -------------------------------------------------------
-  # 2. TASK_NORM_AUDIO_ACQ: Thu thập & Chuẩn hóa I2S (FSM)
-  # -------------------------------------------------------
-  - tnorm: TASK_NORM_AUDIO_ACQ
+  - tnorm: TASK_NORM_ACQ # NOTE - ACQ will not used UEDP_FSM_SIG_ENTRY
     fsm:
-      - id: fsm_acq_state_idle
+      - id: fsm_acq_trigger
         on_recv:
-          - sig: *sig1-ank  # Nhận lệnh kích hoạt
-            goto: fsm_acq_state_sampling
+          - sig: UEDP_FSM_SIG_INIT
+            goto: NULL
             steps:
-              - actv: 
-                  kind: c_call
-                  function: printf
-                  args: ['"[ACQ][IDLE] Starting DMA Ping-Pong Buffer.\n"']
-      - id: fsm_acq_state_sampling
-        on_recv:
-          # Nhận thông báo Half-Buffer từ ngắt DMA (SII)
-          - sig: *sig3-ank  # SIG_AUDIO_DMA_HALF / FULL
-            goto: fsm_acq_state_sampling
-            steps:
-              - actv: 
+              - actv:
                   kind: c_stmt
                   code: |
-                    // 1. Chuyển đổi mẫu thô 24-bit I2S -> 16-bit Mono Frame
-                    GDA_FRAME_COUNTER++;
-                    printf("[ACQ][SAMPLING] Ingested Audio Buffer. Frame Count: %d.\n", GDA_FRAME_COUNTER);
+                    uedp_itnlog_log(
+                      HAL_GetTick(), ITNLOG_LEVEL_DEBUG,
+                      ITNLOG_TAG_FSM, "[ACQ] FSM initialized.\n"
+                    );
+          - sig: UEDP_FSM_SIG_EXIT
+            goto: NULL
+            steps:
+              - actv:
+                  kind: c_stmt
+                  code: |
+                    uedp_itnlog_log(
+                      HAL_GetTick(), ITNLOG_LEVEL_DEBUG,
+                      ITNLOG_TAG_FSM, "[ACQ] Exit state trigger.\n"
+                    );
+          - sig: *sig1-ank # SIG_USR_START
+            goto: fsm_acq_state_warmup
+            steps:
+              - actv:
+                  kind: c_stmt
+                  code: | # NOTE - due to API is non-blocking, we just check the return value is OK to ensure the DMA transfer is started successfully.
+                    if (HAL_I2S_Receive_DMA(&hi2s1, (ui16 *)i2s_rx_buffer, I2S_DMA_SAMPLES) != HAL_OK) {
+                      Error_Handler();
+                    }
+                    // NOTE - Can bo sung callback cho half va complete transfer de gui sig3-ank cho fsm_acq_warmup va fsm_acq_state_streaming
+
+                    // REVIEW - Suspicious for add singal at between "after I2S call" and "before warmup state entry"
+      - id: fsm_acq_warmup
+        on_recv:
+          - sig: UEDP_FSM_SIG_ENTRY
+            goto: NULL
+            steps:
+              - actv:
+                  kind: c_stmt
+                  code: |
+                    uedp_itnlog_log(
+                      HAL_GetTick(), ITNLOG_LEVEL_DEBUG,
+                      ITNLOG_TAG_FSM, "[ACQ] Warmup state entry.\n"
+                    );
+
+                    // NOTE - Start timer with 400ms timeout to ensure the warmup process is completed before update timer to 10s.
+                    if (uedp_timer_set(TASK_NORM_ACQ, SIG_WARMUP_TIMEOUT, 400, UEDP_TIMER_MODE_ONESHOT) != UEDP_OK) {
+                      Error_Handler();
+                    }
+          - sig: UEDP_FSM_SIG_EXIT
+            goto: NULL
+            steps:
+              - actv:
+                  kind: c_stmt
+                  code: |
+                    uedp_itnlog_log(
+                      HAL_GetTick(), ITNLOG_LEVEL_DEBUG,
+                      ITNLOG_TAG_FSM, "[ACQ] Warmup state exit.\n"
+                    );
+          - sig: *sig3-ank # SIG_DMA_CALL
+            goto: NULL # NOTE - as half-callback and complete-callback is triggered every 16ms with arr[1024] array sample, the transfer state must be manual called in the end of state
+            steps:
+              - actv:
+                  kind: c_stmt
+                  code: |
+                    ui8 warmup_block_remain = 0;
+
+                    // NOTE - internal FCR so no need to check
+                    uedp_gdp_get_val("gdp_warmup_left", &warmup_block_remain, sizeof(gdp_warmup_left);
                     
-                    // 2. Góp đủ 1024 mẫu -> gửi tín hiệu cho Task DSP tính MFCC
-                    uedp_msg_t* m = uedp_msg_alloc(TASK_NORM_DSP_MFCC, SIG_FRAME_READY, sizeof(void*));
-                    if (m) uedp_task_norm_post_msg(TASK_NORM_DSP_MFCC, m);
+                    if (warmup_block_remain > 20U) {
+                      warmup_left--;
+                      return; // Bo qua ~80ms dau luc INMP441 moi thuc day
+                    }
+              - actv: # NOTE - Channel singulation with DC filter
+                  kind: c_stmt
+                  code: |
+                    for (uint32_t i = 0U; i < I2S_DMA_HALF_SAMPLES; i += 2U) {
+                      int32_t sL = DecodeI2S24(half_samples[i]) >> 8;
+                      int32_t sR = DecodeI2S24(half_samples[i + 1U]) >> 8;
+
+                      // NOTE - Gop 2 kenh va xoa gai 1-mau khi L/R chuyen trang thai
+                      int32_t raw16;
+                      if ((sL == 0) && (sR == 0))
+                        raw16 = prev_raw16;
+                      else {
+                        raw16 = (sL != 0) ? sL : sR;
+                        prev_raw16 = raw16;
+                      }
+
+                      // NOTE - Loc khu DC Offset online (~10Hz HPF)
+                      dc_est_q8 += (((int64_t)raw16 << 8) - dc_est_q8) >> 9;
+                      int32_t clean16 = raw16 - (int32_t)(dc_est_q8 >> 8);
+                      if (clean16 > 32767)  clean16 = 32767;
+                      if (clean16 < -32768) clean16 = -32768;
+
+                      // NOTE - Trong 20 block warmup cuoi (~320ms): chi nuoi bo loc DC cho on dinh, KHONG ghi vao ring buffer
+                      if (warmup_left > 0U)
+                        continue;
+
+                      if (samples_captured >= RECORDING_SAMPLES)
+                        break;
+
+                      uint32_t next_head = (ring_head + 1U) & (RING_BUF_SAMPLES - 1U);
+                      if (next_head == ring_tail) {
+                        ring_overflow = 1U;
+                        break;
+                      }
+
+                      ring_buf[ring_head] = (int16_t)clean16;
+                      int32_t mag = (clean16 < 0) ? -clean16 : clean16;
+                      if (mag > capture_peak)
+                        capture_peak = mag;
+                      __DMB();
+                      ring_head = next_head;
+                      samples_captured++;
+                    }
+      - id: fsm_acq_state_streaming
+        on_recv:
+          - sig: *sig3-ank       # Nhận block dữ liệu DMA liên tục
+            goto: fsm_dlv_state_streaming
+            steps:
+              - actv:
+                  kind: c_stmt
+                  code: |
+                    // 1. Giải mã I2S 24-bit -> 16-bit Mono & Lọc DC (~10Hz HPF) theo đúng code gốc
+                    // 2. Cập nhật đỉnh biên độ (GDA_CAPTURE_PEAK)
+                    GDA_FRAME_COUNTER++;
+
+                    // 3. Cứ đủ 1024 mẫu (50% overlap / 512 hop) -> gửi tín hiệu sang Task DSP
+                    uedp_msg_t* m = uedp_msg_alloc(TASK_NORM_DSP, SIG_FRAME_READY, sizeof(void*));
+                    if (m) {
+                      uedp_task_norm_post_msg(TASK_NORM_DSP, m);
+                    }
     <<: *tnorm2-ank
 
-  # -------------------------------------------------------
-  # 3. TASK_NORM_DSP_MFCC: Trích xuất đặc trưng âm thanh (Exec)
-  # Chỗ này sẽ bổ sung thêm các bước xử lý thực tế của libmfcc hoặc CMSIS-DSP để tính toán MFCC từ dữ liệu âm thanh thu được.
-  # -------------------------------------------------------
-  - tnorm: TASK_NORM_DSP_MFCC
+  
+  # 3. TASK_NORM_DSP: Thực thi KissFFT (1024) & MFCC (13 hệ số) trực tiếp trên RAM (Exec)
+  
+  - tnorm: TASK_NORM_DSP
     exec:
-      - on_sig: *sig4-ank  # SIG_FRAME_READY
+      - on_sig: *sig4-ank        # SIG_FRAME_READY
         steps:
-          - actv: 
+          - actv:
               kind: c_stmt
               code: |
-                // Gọi thư viện CMSIS-DSP tính toán: Hanning Window -> RFFT -> Mel Filterbank -> DCT
-                printf("[DSP][MFCC] Processing 1024-point FFT & Extracting 20 MFCC features.\n");
-                
-                // Gửi thông báo cho Task AI suy luận
-                uedp_msg_t* m = uedp_msg_alloc(TASK_NORM_AI_INFER, SIG_FEATURES_READY, sizeof(void*));
-                if (m) uedp_task_norm_post_msg(TASK_NORM_AI_INFER, m);
+                // 1. Áp dụng Hann Window & tính KissFFTR 1024 điểm
+                // 2. Chuyển đổi qua Mel-scale Filterbank (40 dải) & DCT -> 13 hệ số MFCC
+                // (Thực thi hoàn toàn trên RAM D1/AXI, mất ~3ms, không chạm thẻ SD)
+
+                // 3. Gửi thông báo hoàn tất trích xuất đặc trưng sang Task AI2
+                uedp_msg_t* m = uedp_msg_alloc(TASK_NORM_AI2, SIG_FEATURES_READY, sizeof(void*));
+                if (m) {
+                  uedp_task_norm_post_msg(TASK_NORM_AI2, m);
+                }
     <<: *tnorm3-ank
 
-  # -------------------------------------------------------
-  # 4. TASK_NORM_AI_INFER: Suy luận Anomaly Score qua TFLite (Exec)
-  # Hiện tại model chưa được tích hợp, chỉ là tạm thời để minh họa trước khi implement thực tế
-  # -------------------------------------------------------
-  - tnorm: TASK_NORM_AI_INFER
+  
+  # 4. TASK_NORM_AI2: Suy luận TFLite Anomaly Score (Exec)
+  
+  - tnorm: TASK_NORM_AI2
     exec:
-      - on_sig: *sig5-ank  # SIG_FEATURES_READY
+      - on_sig: *sig5-ank        # SIG_FEATURES_READY
         steps:
-          - actv: 
+          - actv:
               kind: c_stmt
               code: |
-                printf("[AI][INFER] Invoking TFLite Micro Interpreter on Tensor Arena...\n");
-                
-                // Giả lập điểm số bất thường từ mô hình (ví dụ 85% - có dấu hiệu mòn ổ bi)
-                GDA_ANOMALY_SCORE = 85; 
-                printf("[AI][INFER] Inference Complete. Anomaly Score: %d%%.\n", GDA_ANOMALY_SCORE);
-                
-                // Báo cáo kết quả về Task Giám sát
-                uedp_msg_t* m = uedp_msg_alloc(TASK_NORM_SUPERVISOR, SIG_DIAG_RESULT, sizeof(int));
+                // Nạp 13 hệ số MFCC vào Tensor Arena và invoke TFLite Micro
+                // Giả lập tính toán: nếu biên độ rung động cao -> sinh Anomaly Score
+                int anomaly_score = (GDA_CAPTURE_PEAK > 25000) ? 92 : 12;
+
+                // Gửi kết quả chẩn đoán về cho Task Giám sát (SPV)
+                uedp_msg_t* m = uedp_msg_alloc(TASK_NORM_SPV, SIG_DIAG_RESULT, sizeof(int));
                 if (m) {
-                  uedp_msg_set_data_val(m, &GDA_ANOMALY_SCORE, sizeof(int));
-                  uedp_task_norm_post_msg(TASK_NORM_SUPERVISOR, m);
+                  uedp_msg_set_data_val(m, &anomaly_score, sizeof(int));
+                  uedp_task_norm_post_msg(TASK_NORM_SPV, m);
                 }
     <<: *tnorm4-ank
 
-  # -------------------------------------------------------
-  # 5. TASK_NORM_SUPERVISOR: Đánh giá & Phản ứng khẩn cấp (TSM + APE)
-  # -------------------------------------------------------
-  - tnorm: TASK_NORM_SUPERVISOR
+  
+  # 5. TASK_NORM_SPV: Giám sát tình trạng ổ bi & Kích hoạt khẩn cấp (TSM + APE)
+  
+  - tnorm: TASK_NORM_SPV
     tsm:
-      - id: tsm_diag_state_healthy
+      - id: tsm_spv_state_healthy
         trans:
-          - sig: *sig6-ank  # SIG_DIAG_RESULT
-            goto: tsm_diag_state_fault
+          - sig: *sig6-ank       # SIG_DIAG_RESULT
+            goto: tsm_spv_state_warning
         on_ntry:
           steps:
-            - actv: 
+            - actv:
                 kind: c_stmt
                 code: |
-                  GDA_BEARING_STATUS = "STATUS: BEARING_NORMAL";
-                  printf("[SUPERVISOR][HEALTHY] Machine operating normally.\n");
+                  SYSTEM_STATUS = "STATUS: BEARING_HEALTHY";
+                  printf("[SPV][HEALTHY] Vibration levels normal.\n");
         on_actv:
           steps:
-            - actv: 
+            - actv:
                 kind: c_stmt
                 code: |
-                  // Đọc kết quả từ AI, nếu vượt ngưỡng 80% chuyển trạng thái nguy hiểm
                   int score = *(int*)(msg->data);
                   if (score > 80) {
-                    printf("[SUPERVISOR][HEALTHY] High Anomaly Detected (%d%%)! Transitioning to FAULT.\n", score);
+                    printf("[SPV][HEALTHY] Anomaly Detected (%d%%)! Escalating to WARNING.\n", score);
                   }
         on_exit:
-          actv: 
+          actv:
             kind: c_call
             function: printf
-            args: ['"[SUPERVISOR][HEALTHY][EXIT] Health status changed.\n"']
+            args: ['"[SPV][HEALTHY][EXIT] Leaving Healthy state.\n"']
 
-      - id: tsm_diag_state_fault
+      - id: tsm_spv_state_warning
         trans:
-          - sig: *sig2-ank  # SIG_USR_STOP
-            goto: tsm_diag_state_healthy
+          - sig: *sig6-ank       # Đánh giá tiếp tục
+            goto: tsm_spv_state_alarm
+          - sig: *sig2-ank       # Reset khi hết phiên
+            goto: tsm_spv_state_healthy
         on_ntry:
           steps:
-            - actv: 
+            - actv:
                 kind: c_stmt
                 code: |
-                  GDA_BEARING_STATUS = "STATUS: CRITICAL_OUTER_RACE_FAULT";
+                  SYSTEM_STATUS = "STATUS: BEARING_DEGRADED";
+                  printf("[SPV][WARNING] Debouncing Bearing Flaw... Continuous monitoring.\n");
+        on_actv:
+          steps:
+            - actv:
+                kind: c_stmt
+                code: |
+                  // Nếu lỗi lặp lại -> Chuyển sang ALARM
+        on_exit:
+          actv:
+            kind: c_call
+            function: printf
+            args: ['"[SPV][WARNING][EXIT] State shift.\n"']
+
+      - id: tsm_spv_state_alarm
+        trans:
+          - sig: *sig2-ank       # Reset khi dừng hệ thống
+            goto: tsm_spv_state_healthy
+        on_ntry:
+          steps:
+            - actv:
+                kind: c_stmt
+                code: |
+                  SYSTEM_STATUS = "STATUS: CRITICAL_DEFECT_ALARM";
                   GDA_EMERGENCY_TRIP = true;
-                  printf("[SUPERVISOR][FAULT][NTRY] >>> CRITICAL BEARING DEFECT DETECTED! <<<\n");
-                  
-                  // KÍCH HOẠT APE: Tự tăng ưu tiên để ngắt máy khẩn cấp ngay lập tức!
-                  uedp_task_norm_post_urgent(TASK_NORM_SUPERVISOR, SIG_EMERGENCY_TRIP);
-                  
-                  // ĐĂNG KÝ OCE: Lưu trữ âm thanh sự cố xuống thẻ SD khi CPU rảnh rỗi
+                  printf("\r\n[SPV][ALARM][NTRY] >>> DANGER! CRITICAL BEARING DEFECT CONFIRMED! <<<\n");
+
+                  // 1. KÍCH HOẠT APE: Tự tăng mức ưu tiên để ngắt máy khẩn cấp ngay lập tức!
+                  uedp_task_norm_post_urgent(TASK_NORM_SPV, SIG_EMERGENCY_HALT);
+
+                  // 2. KÍCH HOẠT OCE: Đăng ký dịch vụ ghi âm thanh sự cố xuống thẻ SD khi CPU rảnh rỗi
                   extern ocesvc_t svc_sd_incident_dump;
                   uedp_ocesvc_register(&svc_sd_incident_dump);
         on_actv:
           steps:
-            - actv: 
+            - actv:
                 kind: c_stmt
                 code: |
-                  if (msg->sig == SIG_EMERGENCY_TRIP) {
-                    printf("[SUPERVISOR][FAULT][ACTV] >>> HARDWARE EMERGENCY RELAY TRIPPED! MACHINE STOPPED. <<<\n");
+                  if (msg->sig == SIG_EMERGENCY_HALT) {
+                    printf("[SPV][ALARM][ACTV] >>> [APE] EMERGENCY RELAY TRIPPED! MOTOR SHUTDOWN. <<<\n");
                   }
         on_exit:
-          actv: 
+          actv:
             kind: c_call
             function: printf
-            args: ['"[SUPERVISOR][FAULT][EXIT] Fault cleared.\n"']
+            args: ['"[SPV][ALARM][EXIT] Alarm cleared.\n"']
     escal:
+      # Cấu hình APE cho Task Supervisor
       mode: slnf
       trigger:
-        - on_sig: *sig7-ank  # SIG_EMERGENCY_TRIP
+        - on_sig: *sig7-ank      # SIG_EMERGENCY_HALT
           post_urgent: NULL
     <<: *tnorm5-ank
 
-  # -------------------------------------------------------
-  # POLLING TASKS: Đèn trạng thái & Heartbeat
-  # -------------------------------------------------------
+  
+  # POLLING TASKS: Đèn LED chỉ thị nhịp tim
+  
   - tpoll: TASK_POLL_BLINK
     exec: NULL
     <<: *tpoll1-ank
 
-# =========================================================
-# ANCHOR - Out-Context Execution (OUTEXEC)
-# =========================================================
+
+# ANCHOR - Out-Context Execution (OUTEXEC) - Thực thi hậu trường ngoài ngữ cảnh
+
 outexec:
-  # Dịch vụ ghi nhị phân dữ liệu sự cố xuống thẻ SD khi hệ thống rảnh
+  # Dịch vụ ghi nhị phân file SD (f_write) và in log UART khi CPU rảnh rỗi
   - name: OCE_SD_INCIDENT_DUMP
     handler: oce_sd_incident_dump_handler
-    context: "&GDA_ANOMALY_SCORE"
+    context: "&GDA_CAPTURE_PEAK"
     state: READY
