@@ -72,10 +72,10 @@ static uint32_t i2s_rx_buffer[I2S_DMA_SAMPLES];
 static int16_t ring_buf[RING_BUF_SAMPLES]; /* 32KB */
 static volatile uint32_t ring_head = 0U;
 static volatile uint32_t ring_tail = 0U;
-static volatile uint32_t warmup_left = 0U;
+static volatile uint8_t warmup_left = 0U;
 static volatile uint32_t samples_captured = 0U;
-static volatile uint32_t i2s_dma_error = 0U;
-static volatile uint32_t ring_overflow = 0U;
+static volatile uint8_t i2s_dma_error = 0U;
+static volatile uint8_t ring_overflow = 0U;
 static volatile int32_t capture_peak = 0;
 
 static int32_t prev_raw16 = 0;
